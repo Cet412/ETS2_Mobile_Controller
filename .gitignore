@@ -1,0 +1,39 @@
+# ==========================================
+# Android & Gradle Configuration
+# ==========================================
+# Build artifacts and cache
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.cxx/
+build/
+captures/
+.externalNativeBuild/
+android_client/build/
+android_client/app/build/
+
+# Local Keystore files
+*.jks
+*.keystore
+
+# ==========================================
+# Python Configuration
+# ==========================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+.env
+.venv/
+
+# ==========================================
+# OS configuration & editor configuration
+# ==========================================
+.DS_Store
+Thumbs.db
+.vscode/
