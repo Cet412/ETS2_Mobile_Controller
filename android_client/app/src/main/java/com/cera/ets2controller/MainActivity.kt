@@ -5,12 +5,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -41,14 +44,19 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ControllerScreen() {
-    // State Management
+    // State Management Dasar
     var steeringAngle by remember { mutableFloatStateOf(0f) }
     var gasValue by remember { mutableFloatStateOf(0f) }
     var brakeValue by remember { mutableFloatStateOf(0f) }
     var lightMode by remember { mutableStateOf(LightMode.OFF) }
     var signalMode by remember { mutableStateOf(SignalMode.OFF) }
 
-    // Blinking Logic (500ms)
+    // State Management Toggle
+    var isLaneAssistOn by remember { mutableStateOf(false) }
+    var isCruiseOn by remember { mutableStateOf(false) }
+    var isParkingBrakeOn by remember { mutableStateOf(false) }
+
+    // Blinking Logic
     var isBlinkOn by remember { mutableStateOf(false) }
     LaunchedEffect(signalMode) {
         if (signalMode != SignalMode.OFF) {
@@ -62,29 +70,103 @@ fun ControllerScreen() {
     }
 
     ConstraintLayout(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
+        modifier = Modifier.fillMaxSize()
     ) {
         val (
-            steering, signals, engine,
-            pedals, parkingBrake, shifter,
-            leftGroup, cruiseGroup
+            topBar, steering, signals, engine,
+            gasPedalRef, brakePedalRef, parkingBrake,
+            shifter, leftGroup, cruiseGroup
         ) = createRefs()
 
-        // 1. STEERING WHEEL (Kiri Bawah)
+        // 1. HEADER / TOP BAR
+        Row(
+            modifier = Modifier
+                .constrainAs(topBar) {
+                    top.linkTo(parent.top)
+                    start.linkTo(parent.start)
+                    end.linkTo(parent.end)
+                }
+                .fillMaxWidth()
+                .background(Color(0xFFE0E0E0))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            androidx.compose.material3.Icon(
+                painter = painterResource(id = android.R.drawable.ic_menu_sort_by_size),
+                contentDescription = "Menu"
+            )
+            androidx.compose.material3.Text(
+                text = "EURO TRUCK SIMULATOR 2 CONTROLLER",
+                color = Color.Black
+            )
+            Box(
+                modifier = Modifier
+                    .size(16.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(Color.Red)
+            )
+        }
+
+        // 2. LEFT CONTROL GROUP (Lampu, Wiper, Lane Assist, Horn)
+        Row(modifier = Modifier.constrainAs(leftGroup) {
+            top.linkTo(topBar.bottom, margin = 16.dp)
+            start.linkTo(parent.start, margin = 16.dp)
+        }) {
+            // Main Light Switch
+            ToggleIconButton(
+                icon = when(lightMode) {
+                    LightMode.OFF, LightMode.PARKING -> R.drawable.parking_light
+                    LightMode.LOW_BEAM -> R.drawable.low_beam
+                    LightMode.HIGH_BEAM -> R.drawable.high_beam
+                },
+                isActive = lightMode != LightMode.OFF,
+                activeColor = when(lightMode) {
+                    LightMode.OFF -> Color.Black
+                    LightMode.PARKING -> Color.Cyan
+                    LightMode.LOW_BEAM -> Color(0xFFFFA500)
+                    LightMode.HIGH_BEAM -> Color.Blue
+                }
+            ) {
+                lightMode = when(lightMode) {
+                    LightMode.OFF -> LightMode.PARKING
+                    LightMode.PARKING -> LightMode.LOW_BEAM
+                    LightMode.LOW_BEAM -> LightMode.HIGH_BEAM
+                    LightMode.HIGH_BEAM -> LightMode.OFF
+                }
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+
+            // Wipers
+            ToggleIconButton(R.drawable.wiper, isActive = false) { }
+            Spacer(modifier = Modifier.width(16.dp))
+
+            // Lane Assist
+            ToggleIconButton(
+                icon = R.drawable.lane_assist,
+                isActive = isLaneAssistOn,
+                activeColor = Color.Green
+            ) { isLaneAssistOn = !isLaneAssistOn }
+            Spacer(modifier = Modifier.width(16.dp))
+            MomentaryIconButton(
+                icon = R.drawable.horn,
+                activeColor = Color.DarkGray
+            ) { }
+        }
+
+        // 4. STEERING WHEEL
         SteeringWheel(
             modifier = Modifier
-                .size(220.dp)
+                .size(170.dp) // Ukuran modifikasi Anda
                 .constrainAs(steering) {
-                    start.linkTo(parent.start)
-                    bottom.linkTo(parent.bottom)
+                    start.linkTo(parent.start, margin = 32.dp)
+                    bottom.linkTo(parent.bottom, margin = 16.dp)
                 },
             angle = steeringAngle,
             onAngleChanged = { steeringAngle = it }
         )
 
-        // 2. TURN SIGNALS & HAZARD (Terpusat di atas setir)
+        // 5. TURN SIGNALS & HAZARD
         Row(
             modifier = Modifier.constrainAs(signals) {
                 bottom.linkTo(steering.top, margin = 12.dp)
@@ -106,105 +188,138 @@ fun ControllerScreen() {
             }
         }
 
-        // 3. LEFT CONTROL GROUP (Lampu, Wiper, Horn)
-        Column(modifier = Modifier.constrainAs(leftGroup) {
-            top.linkTo(parent.top)
-            start.linkTo(parent.start)
-        }) {
-            Row {
-                ControlIconButton(
-                    icon = when(lightMode) {
-                        LightMode.OFF, LightMode.PARKING -> R.drawable.parking_light
-                        LightMode.LOW_BEAM -> R.drawable.low_beam
-                        LightMode.HIGH_BEAM -> R.drawable.high_beam
-                    },
-                    activeColor = when(lightMode) {
-                        LightMode.OFF -> Color.Black
-                        LightMode.PARKING -> Color.Cyan
-                        LightMode.LOW_BEAM -> Color(0xFFFFA500)
-                        LightMode.HIGH_BEAM -> Color.Blue
-                    }
-                ) {
-                    lightMode = when(lightMode) {
-                        LightMode.OFF -> LightMode.PARKING
-                        LightMode.PARKING -> LightMode.LOW_BEAM
-                        LightMode.LOW_BEAM -> LightMode.HIGH_BEAM
-                        LightMode.HIGH_BEAM -> LightMode.OFF
-                    }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                ControlIconButton(R.drawable.wiper) { /* Logika Wiper */ }
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            ControlIconButton(R.drawable.horn) { /* Logika Klakson */ }
-        }
-
-        // 4. ENGINE START/STOP (Tengah Bawah)
-        ControlIconButton(
+        // 6. ENGINE START/STOP
+        ToggleIconButton(
             icon = R.drawable.engine_start_stop,
+            isActive = false,
             modifier = Modifier.constrainAs(engine) {
-                bottom.linkTo(parent.bottom)
-                start.linkTo(parent.start)
-                end.linkTo(parent.end)
+                bottom.linkTo(parent.bottom, margin = 16.dp)
+                start.linkTo(steering.end)
+                end.linkTo(brakePedalRef.start) // Ditengah setir dan pedal
             }
-        ) { /* Logika Engine */ }
+        ) { }
 
-        // 5. PEDAL GROUP (Gas & Rem - Kanan Bawah)
-        Row(modifier = Modifier.constrainAs(pedals) {
-            bottom.linkTo(parent.bottom)
-            end.linkTo(parent.end)
-        }) {
-            Pedal(R.drawable.brake_pedal, brakeValue) { brakeValue = it }
-            Spacer(modifier = Modifier.width(24.dp))
-            Pedal(R.drawable.gas_pedal, gasValue) { gasValue = it }
-        }
-
-        // 6. PARKING BRAKE (Di atas Pedal)
-        ControlIconButton(
-            icon = R.drawable.parking_brake,
-            modifier = Modifier.constrainAs(parkingBrake) {
-                bottom.linkTo(pedals.top, margin = 20.dp)
-                end.linkTo(pedals.start, margin = 20.dp)
-            }
-        ) { /* Logika Parking Brake */ }
-
-        // 7. CRUISE CONTROL GROUP (Kanan Atas)
+        // 7. CRUISE CONTROL GROUP (Rasio 2:1 diterapkan via buttonSize)
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.constrainAs(cruiseGroup) {
-                top.linkTo(parent.top)
-                end.linkTo(parent.end)
+                top.linkTo(topBar.bottom, margin = 32.dp)
+                end.linkTo(parent.end, margin = 32.dp)
             }
         ) {
-            // Asumsi nama file: R.drawable.cruise_arrow & R.drawable.cruise_control_toggle
-            ControlIconButton(R.drawable.cruise_arrow) { /* Logika Cruise Up */ }
-            ControlIconButton(R.drawable.cruise_control_toggle) { /* Logika Cruise Toggle */ }
-
-            // Putar aset 180 derajat untuk tombol Down
-            ControlIconButton(
+            // Arrow = 18.dp
+            MomentaryIconButton(R.drawable.cruise_arrow, buttonSize = 25.dp) { }
+            // Toggle = 36.dp
+            ToggleIconButton(
+                icon = R.drawable.cruise_control_toggle,
+                isActive = isCruiseOn,
+                activeColor = Color.Green,
+                buttonSize = 50.dp
+            ) { isCruiseOn = !isCruiseOn }
+            // Arrow Down = 18.dp
+            MomentaryIconButton(
                 icon = R.drawable.cruise_arrow,
-                modifier = Modifier.graphicsLayer { rotationZ = 180f }
-            ) { /* Logika Cruise Down */ }
+                modifier = Modifier.graphicsLayer { rotationZ = 180f },
+                buttonSize = 25.dp
+            ) { }
         }
 
-        // 8. SHIFTER GROUP (Di bawah Cruise Control)
-        // Pemanggilan 'shifter' di sini akan menghilangkan error Unused Variable
+        // 8. SHIFTER GROUP (Size disamakan dengan CC Toggle = 36.dp)
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.constrainAs(shifter) {
-                top.linkTo(cruiseGroup.bottom, margin = 24.dp)
-                end.linkTo(parent.end)
+                bottom.linkTo(parent.bottom, margin = 24.dp)
+                end.linkTo(parent.end, margin = 24.dp)
             }
         ) {
-            // Asumsi nama file: R.drawable.shifter_arrow
-            ControlIconButton(R.drawable.shifter_arrow) { /* Logika Shifter Up */ }
-
-            // Putar aset 180 derajat untuk tombol Down
-            ControlIconButton(
+            MomentaryIconButton(
                 icon = R.drawable.shifter_arrow,
-                modifier = Modifier.graphicsLayer { rotationZ = 180f }
-            ) { /* Logika Shifter Down */ }
+                activeColor = Color.DarkGray,
+                modifier = Modifier.graphicsLayer { rotationZ = -90f },
+                buttonSize = 50.dp
+            ) { }
+            MomentaryIconButton(
+                icon = R.drawable.shifter_arrow,
+                activeColor = Color.DarkGray,
+                modifier = Modifier.graphicsLayer { rotationZ = 90f },
+                buttonSize = 50.dp
+            ) { }
         }
+
+        // 9. GAS PEDAL (Digeser jauh dari Shifter agar tidak clipping)
+        Box(modifier = Modifier.constrainAs(gasPedalRef) {
+            bottom.linkTo(parent.bottom, margin = 16.dp)
+            end.linkTo(shifter.start, margin = 32.dp) // Jarak aman dari shifter
+        }) {
+            Pedal(R.drawable.gas_pedal, gasValue) { gasValue = it }
+        }
+
+        // 10. BRAKE PEDAL (Di sebelah kiri Gas)
+        Box(modifier = Modifier.constrainAs(brakePedalRef) {
+            bottom.linkTo(parent.bottom, margin = 16.dp)
+            end.linkTo(gasPedalRef.start, margin = 10.dp)
+        }) {
+            Pedal(R.drawable.brake_pedal, brakeValue) { brakeValue = it }
+        }
+
+        // 11. PARKING BRAKE (Akurat tepat di atas Brake Pedal)
+        ToggleIconButton(
+            icon = R.drawable.parking_brake,
+            isActive = isParkingBrakeOn,
+            activeColor = Color.Red,
+            buttonSize = 36.dp,
+            modifier = Modifier.constrainAs(parkingBrake) {
+                bottom.linkTo(brakePedalRef.top, margin = 16.dp) // Patokan bawahnya adalah atas rem
+                start.linkTo(brakePedalRef.start)                // Rata Kiri rem
+                end.linkTo(brakePedalRef.end)                  // Rata Kanan rem
+            }
+        ) { isParkingBrakeOn = !isParkingBrakeOn }
+    }
+}
+
+// --- FUNGSI PEMBANTU (DIPERBARUI DENGAN buttonSize) ---
+
+@Composable
+fun ToggleIconButton(
+    icon: Int,
+    modifier: Modifier = Modifier,
+    isActive: Boolean,
+    activeColor: Color = Color.Black,
+    buttonSize: androidx.compose.ui.unit.Dp = 48.dp, // Parameter Baru
+    onClick: () -> Unit
+) {
+    androidx.compose.material3.IconButton(onClick = onClick, modifier = modifier.size(buttonSize)) {
+        Image(
+            painter = painterResource(icon),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(if (isActive) activeColor else Color.Black),
+            modifier = Modifier.fillMaxSize() // Memaksa gambar mengikuti buttonSize
+        )
+    }
+}
+
+@Composable
+fun MomentaryIconButton(
+    icon: Int,
+    modifier: Modifier = Modifier,
+    activeColor: Color = Color.Green,
+    buttonSize: androidx.compose.ui.unit.Dp = 48.dp, // Parameter Baru
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    androidx.compose.material3.IconButton(
+        onClick = onClick,
+        modifier = modifier.size(buttonSize),
+        interactionSource = interactionSource
+    ) {
+        Image(
+            painter = painterResource(icon),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(if (isPressed) activeColor else Color.Black),
+            modifier = Modifier.fillMaxSize() // Memaksa gambar mengikuti buttonSize
+        )
     }
 }
 
@@ -279,25 +394,13 @@ fun Pedal(iconRes: Int, value: Float, onValueChange: (Float) -> Unit) {
 }
 
 @Composable
-fun ControlIconButton(icon: Int, modifier: Modifier = Modifier, activeColor: Color = Color.Black, onClick: () -> Unit) {
-    androidx.compose.material3.IconButton(onClick = onClick, modifier = modifier) {
-        Image(
-            painter = painterResource(icon),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(activeColor),
-            modifier = Modifier.size(48.dp)
-        )
-    }
-}
-
-@Composable
 fun SignalButton(icon: Int, isActive: Boolean, activeColor: Color, onClick: () -> Unit) {
     androidx.compose.material3.IconButton(onClick = onClick) {
         Image(
             painter = painterResource(icon),
             contentDescription = null,
             colorFilter = ColorFilter.tint(if (isActive) activeColor else Color.Black.copy(alpha = 0.3f)),
-            modifier = Modifier.size(40.dp)
+            modifier = Modifier.size(30.dp)
         )
     }
 }
