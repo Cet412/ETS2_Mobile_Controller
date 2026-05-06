@@ -25,6 +25,7 @@ import androidx.constraintlayout.compose.ConstraintLayout
 import kotlinx.coroutines.delay
 import kotlin.math.atan2
 import androidx.compose.ui.graphics.drawscope.clipRect
+import kotlinx.coroutines.launch
 
 
 // Enum untuk status kontrol
@@ -325,31 +326,82 @@ fun MomentaryIconButton(
 
 @Composable
 fun SteeringWheel(modifier: Modifier, angle: Float, onAngleChanged: (Float) -> Unit) {
-    var isDragging by remember { mutableStateOf(false) }
-    val animatedAngle by animateFloatAsState(
-        targetValue = if (isDragging) angle else 0f,
-        animationSpec = spring(stiffness = Spring.StiffnessLow)
-    )
+    val scope = rememberCoroutineScope()
+
+    // State UI Absolut: Bebas dari overhead coroutine dispatcher
+    var visualAngle by remember { mutableFloatStateOf(angle) }
+    // Dedicated Animator hanya untuk efek pegas kembali ke tengah
+    val returnAnimator = remember { Animatable(0f) }
+
+    val maxAngle = 720f
+
+    LaunchedEffect(visualAngle) {
+        onAngleChanged(visualAngle)
+    }
 
     Image(
         painter = painterResource(id = R.drawable.steering_wheel),
         contentDescription = null,
         modifier = modifier
-            .graphicsLayer { rotationZ = animatedAngle }
+            // 1. TANGKAP INPUT TERLEBIH DAHULU (Koordinat statis absolut)
             .pointerInput(Unit) {
+                var lastTouchAngle = 0f
+                var accumulatedAngle = 0f
+
                 detectDragGestures(
-                    onDragStart = { isDragging = true },
-                    onDragEnd = { isDragging = false },
-                    onDrag = { change, _ ->
+                    onDragStart = { offset ->
+                        scope.launch { returnAnimator.stop() }
+                        accumulatedAngle = visualAngle
+
                         val centerX = size.width / 2f
                         val centerY = size.height / 2f
-                        val x = change.position.x - centerX
-                        val y = change.position.y - centerY
-                        val deg = Math.toDegrees(atan2(y, x).toDouble()).toFloat() + 90f
-                        onAngleChanged(deg.coerceIn(-180f, 180f))
+                        lastTouchAngle = Math.toDegrees(atan2((offset.y - centerY).toDouble(), (offset.x - centerX).toDouble())).toFloat()
+                    },
+                    onDragEnd = {
+                        scope.launch {
+                            returnAnimator.snapTo(accumulatedAngle)
+                            returnAnimator.animateTo(
+                                targetValue = 0f,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessLow
+                                )
+                            ) {
+                                visualAngle = this.value
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        scope.launch {
+                            returnAnimator.snapTo(accumulatedAngle)
+                            returnAnimator.animateTo(
+                                targetValue = 0f,
+                                animationSpec = spring(stiffness = Spring.StiffnessVeryLow)
+                            ) {
+                                visualAngle = this.value
+                            }
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+
+                        val centerX = size.width / 2f
+                        val centerY = size.height / 2f
+                        val currentTouchAngle = Math.toDegrees(atan2((change.position.y - centerY).toDouble(), (change.position.x - centerX).toDouble())).toFloat()
+
+                        var delta = currentTouchAngle - lastTouchAngle
+
+                        if (delta > 180f) delta -= 360f
+                        else if (delta < -180f) delta += 360f
+
+                        accumulatedAngle = (accumulatedAngle + delta).coerceIn(-maxAngle, maxAngle)
+                        visualAngle = accumulatedAngle
+                        lastTouchAngle = currentTouchAngle
                     }
                 )
             }
+            // 2. TERAPKAN ROTASI VISUAL SETELAH INPUT (Tidak mengubah koordinat sentuh)
+            .graphicsLayer { rotationZ = visualAngle }
     )
 }
 
