@@ -26,10 +26,16 @@ import kotlinx.coroutines.delay
 import kotlin.math.atan2
 import androidx.compose.ui.graphics.drawscope.clipRect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.util.Locale
 
 
 // Enum untuk status kontrol
-enum class LightMode { OFF, PARKING, LOW_BEAM, HIGH_BEAM }
+enum class LightMode { OFF, PARKING, LOW_BEAM }
 enum class SignalMode { OFF, LEFT, RIGHT, HAZARD }
 
 class MainActivity : ComponentActivity() {
@@ -50,12 +56,73 @@ fun ControllerScreen() {
     var gasValue by remember { mutableFloatStateOf(0f) }
     var brakeValue by remember { mutableFloatStateOf(0f) }
     var lightMode by remember { mutableStateOf(LightMode.OFF) }
+    var isHighBeamOn by remember { mutableStateOf(false) }
     var signalMode by remember { mutableStateOf(SignalMode.OFF) }
+    var isEngineOn by remember { mutableStateOf(false) }
+    var isWiperOn by remember { mutableStateOf(false) }
+    var isConnected by remember { mutableStateOf(false) }
 
     // State Management Toggle
     var isLaneAssistOn by remember { mutableStateOf(false) }
     var isCruiseOn by remember { mutableStateOf(false) }
     var isParkingBrakeOn by remember { mutableStateOf(false) }
+
+    // State untuk tombol Momentary
+    var isHornPressed by remember { mutableStateOf(false) }
+    var isShifterUpPressed by remember { mutableStateOf(false) }
+    var isShifterDownPressed by remember { mutableStateOf(false) }
+    var isCruiseUpPressed by remember { mutableStateOf(false) }
+    var isCruiseDownPressed by remember { mutableStateOf(false) }
+
+    // UDP TRANSMITTER LOOP
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            var socket: DatagramSocket? = null
+            try {
+                socket = DatagramSocket()
+                val serverAddress = InetAddress.getByName("10.229.62.195") // IP Hotspot Anda
+                val port = 65432
+
+                while (true) {
+                    val payload = String.format(
+                        Locale.US,
+                        "ST:%.1f|G:%.2f|B:%.2f|PB:%d|L:%d|HB:%d|S:%d|H:%d|SU:%d|SD:%d|CU:%d|CT:%d|CD:%d|LA:%d|E:%d|W:%d",
+                        steeringAngle, gasValue, brakeValue,
+                        if (isParkingBrakeOn) 1 else 0,
+                        lightMode.ordinal,
+                        if (isHighBeamOn) 1 else 0,
+                        signalMode.ordinal,
+                        if (isHornPressed) 1 else 0,
+                        if (isShifterUpPressed) 1 else 0,
+                        if (isShifterDownPressed) 1 else 0,
+                        if (isCruiseUpPressed) 1 else 0,
+                        if (isCruiseOn) 1 else 0,
+                        if (isCruiseDownPressed) 1 else 0,
+                        if (isLaneAssistOn) 1 else 0,
+                        if (isEngineOn) 1 else 0,
+                        if (isWiperOn) 1 else 0
+                    )
+
+                    val buffer = payload.toByteArray()
+                    val packet = DatagramPacket(buffer, buffer.size, serverAddress, port)
+
+                    try {
+                        socket.send(packet)
+                        isConnected = true // Jika berhasil terkirim, ubah ke Hijau
+                    } catch (e: Exception) {
+                        isConnected = false
+                    }
+
+                    delay(16)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                socket?.close()
+                isConnected = false
+            }
+        }
+    }
 
     // Blinking Logic
     var isBlinkOn by remember { mutableStateOf(false) }
@@ -68,6 +135,29 @@ fun ControllerScreen() {
         } else {
             isBlinkOn = false
         }
+    }
+    // Autocancel turn signal logic
+    var maxSteerRight by remember { mutableFloatStateOf(0f) }
+    var maxSteerLeft by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(steeringAngle) {
+        if (signalMode == SignalMode.RIGHT) {
+            if (steeringAngle > 90f) maxSteerRight = maxOf(maxSteerRight, steeringAngle)
+            // Jika pernah lewat 90 derajat, lalu kembali di bawah 90 derajat -> Matikan Sein
+            if (maxSteerRight > 90f && steeringAngle < 90f) {
+                signalMode = SignalMode.OFF
+                maxSteerRight = 0f
+            }
+        } else { maxSteerRight = 0f }
+
+        if (signalMode == SignalMode.LEFT) {
+            if (steeringAngle < -90f) maxSteerLeft = minOf(maxSteerLeft, steeringAngle)
+            // Jika pernah lewat -90 derajat, lalu kembali di atas -90 derajat -> Matikan Sein
+            if (maxSteerLeft < -90f && steeringAngle > -90f) {
+                signalMode = SignalMode.OFF
+                maxSteerLeft = 0f
+            }
+        } else { maxSteerLeft = 0f }
     }
 
     ConstraintLayout(
@@ -105,7 +195,7 @@ fun ControllerScreen() {
                 modifier = Modifier
                     .size(16.dp)
                     .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(Color.Red)
+                    .background(if (isConnected) Color.Green else Color.Red) // DINAMIS
             )
         }
 
@@ -114,32 +204,40 @@ fun ControllerScreen() {
             top.linkTo(topBar.bottom, margin = 16.dp)
             start.linkTo(parent.start, margin = 16.dp)
         }) {
-            // Main Light Switch
+            // 1. Lampu Siklus Utama (Kiri)
             ToggleIconButton(
                 icon = when(lightMode) {
                     LightMode.OFF, LightMode.PARKING -> R.drawable.parking_light
                     LightMode.LOW_BEAM -> R.drawable.low_beam
-                    LightMode.HIGH_BEAM -> R.drawable.high_beam
                 },
                 isActive = lightMode != LightMode.OFF,
                 activeColor = when(lightMode) {
                     LightMode.OFF -> Color.Black
                     LightMode.PARKING -> Color.Cyan
                     LightMode.LOW_BEAM -> Color(0xFFFFA500)
-                    LightMode.HIGH_BEAM -> Color.Blue
                 }
             ) {
                 lightMode = when(lightMode) {
                     LightMode.OFF -> LightMode.PARKING
                     LightMode.PARKING -> LightMode.LOW_BEAM
-                    LightMode.LOW_BEAM -> LightMode.HIGH_BEAM
-                    LightMode.HIGH_BEAM -> LightMode.OFF
+                    LightMode.LOW_BEAM -> LightMode.OFF
                 }
             }
             Spacer(modifier = Modifier.width(16.dp))
 
+            ToggleIconButton(
+                icon = R.drawable.high_beam, // Pastikan Anda memiliki aset ini
+                isActive = isHighBeamOn,
+                activeColor = Color.Blue
+            ) { isHighBeamOn = !isHighBeamOn }
+            Spacer(modifier = Modifier.width(16.dp))
+
             // Wipers
-            ToggleIconButton(R.drawable.wiper, isActive = false) { }
+            ToggleIconButton(
+                icon = R.drawable.wiper,
+                isActive = isWiperOn,
+                activeColor = Color.Cyan
+            ) { isWiperOn = !isWiperOn }
             Spacer(modifier = Modifier.width(16.dp))
 
             // Lane Assist
@@ -149,10 +247,12 @@ fun ControllerScreen() {
                 activeColor = Color.Green
             ) { isLaneAssistOn = !isLaneAssistOn }
             Spacer(modifier = Modifier.width(16.dp))
+
             MomentaryIconButton(
                 icon = R.drawable.horn,
-                activeColor = Color.DarkGray
-            ) { }
+                activeColor = Color.DarkGray,
+                onPressChange = { isHornPressed = it }
+            )
         }
 
         // 4. STEERING WHEEL
@@ -192,13 +292,14 @@ fun ControllerScreen() {
         // 6. ENGINE START/STOP
         ToggleIconButton(
             icon = R.drawable.engine_start_stop,
-            isActive = false,
+            isActive = isEngineOn,
+            activeColor = Color.Green,
             modifier = Modifier.constrainAs(engine) {
                 bottom.linkTo(parent.bottom, margin = 16.dp)
                 start.linkTo(steering.end)
-                end.linkTo(brakePedalRef.start) // Ditengah setir dan pedal
+                end.linkTo(brakePedalRef.start)
             }
-        ) { }
+        ) { isEngineOn = !isEngineOn }
 
         // 7. CRUISE CONTROL GROUP (Rasio 2:1 diterapkan via buttonSize)
         Column(
@@ -208,24 +309,25 @@ fun ControllerScreen() {
                 end.linkTo(parent.end, margin = 32.dp)
             }
         ) {
-            // Arrow = 18.dp
-            MomentaryIconButton(R.drawable.cruise_arrow, buttonSize = 25.dp) { }
-            // Toggle = 36.dp
+            MomentaryIconButton(
+                icon = R.drawable.cruise_arrow,
+                buttonSize = 25.dp,
+                onPressChange = { isCruiseUpPressed = it }
+            )
             ToggleIconButton(
                 icon = R.drawable.cruise_control_toggle,
                 isActive = isCruiseOn,
                 activeColor = Color.Green,
                 buttonSize = 50.dp
             ) { isCruiseOn = !isCruiseOn }
-            // Arrow Down = 18.dp
             MomentaryIconButton(
                 icon = R.drawable.cruise_arrow,
                 modifier = Modifier.graphicsLayer { rotationZ = 180f },
-                buttonSize = 25.dp
-            ) { }
+                buttonSize = 25.dp,
+                onPressChange = { isCruiseDownPressed = it }
+            )
         }
 
-        // 8. SHIFTER GROUP (Size disamakan dengan CC Toggle = 36.dp)
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.constrainAs(shifter) {
@@ -237,14 +339,16 @@ fun ControllerScreen() {
                 icon = R.drawable.shifter_arrow,
                 activeColor = Color.DarkGray,
                 modifier = Modifier.graphicsLayer { rotationZ = -90f },
-                buttonSize = 50.dp
-            ) { }
+                buttonSize = 50.dp,
+                onPressChange = { isShifterUpPressed = it }
+            )
             MomentaryIconButton(
                 icon = R.drawable.shifter_arrow,
                 activeColor = Color.DarkGray,
                 modifier = Modifier.graphicsLayer { rotationZ = 90f },
-                buttonSize = 50.dp
-            ) { }
+                buttonSize = 50.dp,
+                onPressChange = { isShifterDownPressed = it }
+            )
         }
 
         // 9. GAS PEDAL (Digeser jauh dari Shifter agar tidak clipping)
@@ -304,14 +408,19 @@ fun MomentaryIconButton(
     icon: Int,
     modifier: Modifier = Modifier,
     activeColor: Color = Color.Green,
-    buttonSize: androidx.compose.ui.unit.Dp = 48.dp, // Parameter Baru
-    onClick: () -> Unit
+    buttonSize: androidx.compose.ui.unit.Dp = 48.dp,
+    onPressChange: (Boolean) -> Unit = {} // PARAMETER BARU
 ) {
     val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
+    // Lempar status ke komponen induk secara real-time
+    LaunchedEffect(isPressed) {
+        onPressChange(isPressed)
+    }
+
     androidx.compose.material3.IconButton(
-        onClick = onClick,
+        onClick = { },
         modifier = modifier.size(buttonSize),
         interactionSource = interactionSource
     ) {
@@ -319,7 +428,7 @@ fun MomentaryIconButton(
             painter = painterResource(icon),
             contentDescription = null,
             colorFilter = ColorFilter.tint(if (isPressed) activeColor else Color.Black),
-            modifier = Modifier.fillMaxSize() // Memaksa gambar mengikuti buttonSize
+            modifier = Modifier.fillMaxSize()
         )
     }
 }
@@ -333,7 +442,7 @@ fun SteeringWheel(modifier: Modifier, angle: Float, onAngleChanged: (Float) -> U
     // Dedicated Animator hanya untuk efek pegas kembali ke tengah
     val returnAnimator = remember { Animatable(0f) }
 
-    val maxAngle = 720f
+    val maxAngle = 360f
 
     LaunchedEffect(visualAngle) {
         onAngleChanged(visualAngle)
