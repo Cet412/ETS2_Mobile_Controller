@@ -23,142 +23,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.constraintlayout.compose.ConstraintLayout
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlin.math.atan2
 import androidx.compose.ui.graphics.drawscope.clipRect
-
-// ==========================================
-// 1. ENUMS
-// ==========================================
-enum class LightMode { OFF, PARKING, LOW_BEAM }
-enum class SignalMode { OFF, LEFT, RIGHT, HAZARD }
-
-// ==========================================
-// 2. VIEWMODEL (Isolasi Logika & Jaringan)
-// ==========================================
-class ControllerViewModel : ViewModel() {
-    // Analog States
-    var steeringAngle by mutableFloatStateOf(0f)
-    var gasValue by mutableFloatStateOf(0f)
-    var brakeValue by mutableFloatStateOf(0f)
-
-    // Digital States (Toggle)
-    var lightMode by mutableStateOf(LightMode.OFF)
-    var signalMode by mutableStateOf(SignalMode.OFF)
-    var isHighBeamOn by mutableStateOf(false)
-    var isEngineOn by mutableStateOf(false)
-    var isLaneAssistOn by mutableStateOf(false)
-    var isCruiseOn by mutableStateOf(false)
-    var isParkingBrakeOn by mutableStateOf(false)
-
-    // Digital States (Momentary)
-    var isWiperPressed by mutableStateOf(false)
-    var isHornPressed by mutableStateOf(false)
-    var isShifterUpPressed by mutableStateOf(false)
-    var isShifterDownPressed by mutableStateOf(false)
-    var isCruiseUpPressed by mutableStateOf(false)
-    var isCruiseDownPressed by mutableStateOf(false)
-
-    // System States
-    var isConnected by mutableStateOf(false)
-    private var socket: DatagramSocket? = null
-
-    init {
-        startUdpTransmitter()
-    }
-
-    private fun startUdpTransmitter() {
-        viewModelScope.launch(Dispatchers.IO) {
-            var serverAddress: InetAddress? = null
-            val port = 65432
-
-            try {
-                // Buka soket di port spesifik
-                socket = DatagramSocket(port)
-
-                // ==========================================
-                // FASE 1: PASSIVE LISTENER (Reverse-Beacon)
-                // ==========================================
-                socket?.soTimeout = 0 // Menunggu tanpa batas waktu
-
-                val receiveData = ByteArray(1024)
-                val receivePacket = DatagramPacket(receiveData, receiveData.size)
-
-                while (serverAddress == null) {
-                    socket?.receive(receivePacket)
-                    val response = String(receivePacket.data, 0, receivePacket.length)
-
-                    // Memverifikasi paket ping dari PC
-                    if (response.trim() == "ETS2_PC_HERE") {
-                        serverAddress = receivePacket.address
-                        isConnected = true
-                    }
-                }
-
-                // ==========================================
-                // FASE 2: TELEMETRY TRANSMITTER (16-Byte Bitwise)
-                // ==========================================
-                val buffer = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
-
-                while (true) {
-                    var buttonsMask = 0
-                    if (isParkingBrakeOn) buttonsMask = buttonsMask or (1 shl 0)
-                    buttonsMask = buttonsMask or (lightMode.ordinal shl 1)
-                    if (isHighBeamOn) buttonsMask = buttonsMask or (1 shl 3)
-                    buttonsMask = buttonsMask or (signalMode.ordinal shl 4)
-                    if (isHornPressed) buttonsMask = buttonsMask or (1 shl 6)
-                    if (isShifterUpPressed) buttonsMask = buttonsMask or (1 shl 7)
-                    if (isShifterDownPressed) buttonsMask = buttonsMask or (1 shl 8)
-                    if (isCruiseUpPressed) buttonsMask = buttonsMask or (1 shl 9)
-                    if (isCruiseOn) buttonsMask = buttonsMask or (1 shl 10)
-                    if (isCruiseDownPressed) buttonsMask = buttonsMask or (1 shl 11)
-                    if (isLaneAssistOn) buttonsMask = buttonsMask or (1 shl 12)
-                    if (isEngineOn) buttonsMask = buttonsMask or (1 shl 13)
-                    if (isWiperPressed) buttonsMask = buttonsMask or (1 shl 14)
-
-                    buffer.clear()
-                    buffer.putFloat(steeringAngle)
-                    buffer.putFloat(gasValue)
-                    buffer.putFloat(brakeValue)
-                    buffer.putInt(buttonsMask)
-
-                    // Kirim telemetry balik ke alamat IP PC yang didapatkan
-                    val packet = DatagramPacket(buffer.array(), 16, serverAddress, port)
-
-                    try {
-                        socket?.send(packet)
-                    } catch (e: Exception) {
-                        isConnected = false
-                    }
-
-                    delay(16)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                isConnected = false
-            }
-        }
-    }
-
-    fun setBrake(value: Float) {
-        brakeValue = value
-        if (value > 0.05f) isCruiseOn = false
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        socket?.close()
-    }
-}
 
 // ==========================================
 // 3. ACTIVITY ENTRI
@@ -218,7 +86,7 @@ fun ControllerScreen(vm: ControllerViewModel) {
 
     ConstraintLayout(modifier = Modifier.fillMaxSize()) {
         val (
-            topBar, steering, signals, engine,
+            topBar, dashboard, steering, signals, engine, // Tambahkan 'dashboard' disini
             gasPedalRef, brakePedalRef, parkingBrake,
             shifter, leftGroup, cruiseGroup
         ) = createRefs()
@@ -301,6 +169,30 @@ fun ControllerScreen(vm: ControllerViewModel) {
                 activeColor = Color.DarkGray,
                 onPressChange = { vm.isHornPressed = it }
             )
+        }
+
+        // ==========================================
+        // UI DASHBOARD TELEMETRI
+        // ==========================================
+        Row(
+            modifier = Modifier
+                .constrainAs(dashboard) {
+                    top.linkTo(topBar.bottom, margin = 16.dp)
+                    start.linkTo(parent.start)
+                    end.linkTo(parent.end)
+                }
+                .background(Color(0xAA000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            androidx.compose.material3.Text(text = "RPM: ${vm.engineRpm.toInt()}", color = Color.White)
+            androidx.compose.material3.Text(
+                text = "GEAR: ${if (vm.gear == 0) "N" else if (vm.gear < 0) "R" else vm.gear}",
+                color = Color.White
+            )
+            androidx.compose.material3.Text(text = "SPEED: ${vm.speedKmh.toInt()} KM/H", color = Color.Cyan)
+            androidx.compose.material3.Text(text = "FUEL: ${vm.fuelCapacity.toInt()}L", color = Color.White)
         }
 
         // 4. STEERING

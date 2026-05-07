@@ -4,17 +4,17 @@ import struct
 import subprocess
 import re
 import vgamepad as vg
+import truck_telemetry
 
 UDP_IP = "0.0.0.0" 
 UDP_PORT = 65432
+TELEMETRY_PORT = 65433 # Port Receiver di sisi Android
 
 def get_android_gateway_ip():
-    """Mengekstraksi IP Hotspot Android dari tabel routing Windows"""
     try:
         result = subprocess.run(['ipconfig'], stdout=subprocess.PIPE).stdout.decode('utf-8', errors='ignore')
         matches = re.findall(r"Default Gateway.*: ([\d\.]+)", result)
         for ip in matches:
-            # Validasi Private IPv4 Class A/B/C
             if ip.startswith("192.") or ip.startswith("10.") or ip.startswith("172."):
                 return ip
     except Exception:
@@ -22,6 +22,13 @@ def get_android_gateway_ip():
     return None
 
 def main():
+    print("Menginisialisasi modul Shared Memory SCS SDK...")
+    try:
+        truck_telemetry.init()
+    except Exception as e:
+        print(f"Cacat ditemukan pada inisialisasi Telemetry: {e}")
+        return
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((UDP_IP, UDP_PORT))
     
@@ -39,7 +46,7 @@ def main():
     if gateway_ip:
         print(f"Mendeteksi Android Hotspot di IP Gateway: {gateway_ip}")
     else:
-        print("Peringatan: Gateway tidak ditemukan. Pastikan Hotspot menyala dan terhubung.")
+        print("Peringatan: Gateway tidak ditemukan.")
 
     print(f"Menunggu koneksi telemetri di Port {UDP_PORT}...")
 
@@ -47,13 +54,11 @@ def main():
         gamepad.press_button(button=button)
         active_pulses[button] = time.time() + PULSE_DURATION
 
-    # Fase 1: Reverse-Beacon Handshake Loop
-    sock.settimeout(2.0) # Set timeout 2 detik untuk mengirim ulang beacon
+    sock.settimeout(2.0)
     handshake_done = False
 
     while not handshake_done:
         if gateway_ip:
-            # Kirim proaktif paket perkenalan ke Android
             sock.sendto(b"ETS2_PC_HERE", (gateway_ip, UDP_PORT))
         
         try:
@@ -61,16 +66,14 @@ def main():
             if len(data) == 16:
                 print(f"Telemetri terkunci dari Klien: {addr[0]}")
                 handshake_done = True
-                sock.settimeout(None) # Hapus timeout untuk operasi I/O realtime
+                sock.settimeout(None) 
                 break
         except socket.timeout:
-            continue # Ulangi tembakan beacon jika Android belum merespons
+            continue
 
     # Fase 2: Telemetry Loop
     try:
         while True:
-            # Data yang ada di buffer akan digunakan untuk frame pertama, 
-            # frame selanjutnya akan diambil ulang di akhir loop.
             current_time = time.time()
             
             for btn, exp_time in list(active_pulses.items()):
@@ -84,6 +87,7 @@ def main():
                 data, addr = sock.recvfrom(16)
                 continue
 
+            # (Logika Bitmask Gamepad...)
             pb_state = (btn_mask >> 0) & 1
             light_state = (btn_mask >> 1) & 3
             hb_state = (btn_mask >> 3) & 1
@@ -156,6 +160,26 @@ def main():
                 prev_states['S'] = signal_state
 
             gamepad.update()
+
+            # ==========================================
+            # FASE 4: EXTRACT & TRANSMIT REVERSE TELEMETRY
+            # ==========================================
+            try:
+                game_data = truck_telemetry.get_data()
+                if game_data:
+                    # m/s dikonversi ke km/h
+                    speed_ms = float(game_data.get('speed', 0.0))
+                    speed_kmh = speed_ms * 3.6
+                    rpm = float(game_data.get('engineRpm', 0.0))
+                    gear = int(game_data.get('gear', 0))
+                    fuel = float(game_data.get('fuel', 0.0))
+                    
+                    # Pack 16-Bytes: Float, Float, Int, Float (<ffif)
+                    out_payload = struct.pack('<ffif', speed_kmh, rpm, gear, fuel)
+                    sock.sendto(out_payload, (gateway_ip, TELEMETRY_PORT))
+            except Exception:
+                pass # Abaikan jika shared memory sedang terinterupsi
+                
             data, addr = sock.recvfrom(16)
 
     except KeyboardInterrupt:
