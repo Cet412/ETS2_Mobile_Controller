@@ -56,11 +56,13 @@ class ControllerViewModel : ViewModel() {
     // System States
     var isConnected by mutableStateOf(false)
     private var socket: DatagramSocket? = null
+    private var receiverSocket: DatagramSocket? = null // INTERVENSI 1: Deklarasi global
 
     init {
         startUdpTransmitter()
-        startTelemetryReceiver() // Panggil Listener baru
+        startTelemetryReceiver()
     }
+
     private fun startUdpTransmitter() {
         viewModelScope.launch(Dispatchers.IO) {
             var serverAddress: InetAddress? = null
@@ -134,17 +136,16 @@ class ControllerViewModel : ViewModel() {
         }
     }
 
-    // Fungsi Coroutine Receiver
     private fun startTelemetryReceiver() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val receiverSocket = DatagramSocket(65433) // Port Telemetri PC
+                receiverSocket = DatagramSocket(65433) // INTERVENSI 2: Gunakan variabel global
                 val receiveData = ByteArray(16)
                 val receivePacket = DatagramPacket(receiveData, receiveData.size)
                 val buffer = ByteBuffer.wrap(receiveData).order(ByteOrder.LITTLE_ENDIAN)
 
                 while (true) {
-                    receiverSocket.receive(receivePacket)
+                    receiverSocket?.receive(receivePacket)
                     if (receivePacket.length == 16) {
                         buffer.clear()
                         speedKmh = buffer.float
@@ -167,5 +168,6 @@ class ControllerViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         socket?.close()
+        receiverSocket?.close() // INTERVENSI 3: Cegah Memory Leak
     }
 }
