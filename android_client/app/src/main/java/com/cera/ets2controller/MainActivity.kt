@@ -3,6 +3,7 @@ package com.cera.ets2controller
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -22,79 +23,98 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.constraintlayout.compose.ConstraintLayout
-import kotlinx.coroutines.delay
-import kotlin.math.atan2
-import androidx.compose.ui.graphics.drawscope.clipRect
-import kotlinx.coroutines.launch
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
-import java.util.Locale
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.atan2
+import androidx.compose.ui.graphics.drawscope.clipRect
 
-
-// Enum untuk status kontrol
+// ==========================================
+// 1. ENUMS
+// ==========================================
 enum class LightMode { OFF, PARKING, LOW_BEAM }
 enum class SignalMode { OFF, LEFT, RIGHT, HAZARD }
 
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent {
-            Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFADACAC)) {
-                ControllerScreen()
-            }
-        }
+// ==========================================
+// 2. VIEWMODEL (Isolasi Logika & Jaringan)
+// ==========================================
+class ControllerViewModel : ViewModel() {
+    // Analog States
+    var steeringAngle by mutableFloatStateOf(0f)
+    var gasValue by mutableFloatStateOf(0f)
+    var brakeValue by mutableFloatStateOf(0f)
+
+    // Digital States (Toggle)
+    var lightMode by mutableStateOf(LightMode.OFF)
+    var signalMode by mutableStateOf(SignalMode.OFF)
+    var isHighBeamOn by mutableStateOf(false)
+    var isEngineOn by mutableStateOf(false)
+    var isLaneAssistOn by mutableStateOf(false)
+    var isCruiseOn by mutableStateOf(false)
+    var isParkingBrakeOn by mutableStateOf(false)
+
+    // Digital States (Momentary)
+    var isWiperPressed by mutableStateOf(false)
+    var isHornPressed by mutableStateOf(false)
+    var isShifterUpPressed by mutableStateOf(false)
+    var isShifterDownPressed by mutableStateOf(false)
+    var isCruiseUpPressed by mutableStateOf(false)
+    var isCruiseDownPressed by mutableStateOf(false)
+
+    // System States
+    var isConnected by mutableStateOf(false)
+    private var socket: DatagramSocket? = null
+
+    init {
+        startUdpTransmitter()
     }
-}
 
-@Composable
-fun ControllerScreen() {
-    // State Management Dasar
-    var steeringAngle by remember { mutableFloatStateOf(0f) }
-    var gasValue by remember { mutableFloatStateOf(0f) }
-    var brakeValue by remember { mutableFloatStateOf(0f) }
-    var lightMode by remember { mutableStateOf(LightMode.OFF) }
-    var isHighBeamOn by remember { mutableStateOf(false) }
-    var signalMode by remember { mutableStateOf(SignalMode.OFF) }
-    var isEngineOn by remember { mutableStateOf(false) }
-    var isWiperPressed by remember { mutableStateOf(false) }
-    var isConnected by remember { mutableStateOf(false) }
+    private fun startUdpTransmitter() {
+        viewModelScope.launch(Dispatchers.IO) {
+            var serverAddress: InetAddress? = null
+            val port = 65432
 
-    // State Management Toggle
-    var isLaneAssistOn by remember { mutableStateOf(false) }
-    var isCruiseOn by remember { mutableStateOf(false) }
-    var isParkingBrakeOn by remember { mutableStateOf(false) }
-
-    // State untuk tombol Momentary
-    var isHornPressed by remember { mutableStateOf(false) }
-    var isShifterUpPressed by remember { mutableStateOf(false) }
-    var isShifterDownPressed by remember { mutableStateOf(false) }
-    var isCruiseUpPressed by remember { mutableStateOf(false) }
-    var isCruiseDownPressed by remember { mutableStateOf(false) }
-
-    // UDP TRANSMITTER LOOP (16-Byte Bitwise Payload)
-    LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            var socket: DatagramSocket? = null
             try {
-                socket = DatagramSocket()
-                val serverAddress = InetAddress.getByName("10.229.62.195") // IP PC/Hotspot
-                val port = 65432
+                // Buka soket di port spesifik
+                socket = DatagramSocket(port)
 
-                // Pre-alokasi buffer statis untuk mencegah GC Thrashing
+                // ==========================================
+                // FASE 1: PASSIVE LISTENER (Reverse-Beacon)
+                // ==========================================
+                socket?.soTimeout = 0 // Menunggu tanpa batas waktu
+
+                val receiveData = ByteArray(1024)
+                val receivePacket = DatagramPacket(receiveData, receiveData.size)
+
+                while (serverAddress == null) {
+                    socket?.receive(receivePacket)
+                    val response = String(receivePacket.data, 0, receivePacket.length)
+
+                    // Memverifikasi paket ping dari PC
+                    if (response.trim() == "ETS2_PC_HERE") {
+                        serverAddress = receivePacket.address
+                        isConnected = true
+                    }
+                }
+
+                // ==========================================
+                // FASE 2: TELEMETRY TRANSMITTER (16-Byte Bitwise)
+                // ==========================================
                 val buffer = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
 
                 while (true) {
-                    // Kompresi boolean dan enum ke dalam 1 Integer (32-bit)
                     var buttonsMask = 0
                     if (isParkingBrakeOn) buttonsMask = buttonsMask or (1 shl 0)
-                    buttonsMask = buttonsMask or (lightMode.ordinal shl 1) // 2 bit
+                    buttonsMask = buttonsMask or (lightMode.ordinal shl 1)
                     if (isHighBeamOn) buttonsMask = buttonsMask or (1 shl 3)
-                    buttonsMask = buttonsMask or (signalMode.ordinal shl 4) // 2 bit
+                    buttonsMask = buttonsMask or (signalMode.ordinal shl 4)
                     if (isHornPressed) buttonsMask = buttonsMask or (1 shl 6)
                     if (isShifterUpPressed) buttonsMask = buttonsMask or (1 shl 7)
                     if (isShifterDownPressed) buttonsMask = buttonsMask or (1 shl 8)
@@ -105,18 +125,17 @@ fun ControllerScreen() {
                     if (isEngineOn) buttonsMask = buttonsMask or (1 shl 13)
                     if (isWiperPressed) buttonsMask = buttonsMask or (1 shl 14)
 
-                    // Injeksi data ke buffer
                     buffer.clear()
                     buffer.putFloat(steeringAngle)
                     buffer.putFloat(gasValue)
                     buffer.putFloat(brakeValue)
                     buffer.putInt(buttonsMask)
 
+                    // Kirim telemetry balik ke alamat IP PC yang didapatkan
                     val packet = DatagramPacket(buffer.array(), 16, serverAddress, port)
 
                     try {
-                        socket.send(packet)
-                        isConnected = true
+                        socket?.send(packet)
                     } catch (e: Exception) {
                         isConnected = false
                     }
@@ -125,17 +144,47 @@ fun ControllerScreen() {
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
-            } finally {
-                socket?.close()
                 isConnected = false
             }
         }
     }
 
-    //  Blinking Logic
+    fun setBrake(value: Float) {
+        brakeValue = value
+        if (value > 0.05f) isCruiseOn = false
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        socket?.close()
+    }
+}
+
+// ==========================================
+// 3. ACTIVITY ENTRI
+// ==========================================
+class MainActivity : ComponentActivity() {
+    private val viewModel: ControllerViewModel by viewModels()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFADACAC)) {
+                ControllerScreen(viewModel)
+            }
+        }
+    }
+}
+
+// ==========================================
+// 4. UI LAYER (Dumb Component)
+// ==========================================
+@Composable
+fun ControllerScreen(vm: ControllerViewModel) {
+    // Blinking Logic
     var isBlinkOn by remember { mutableStateOf(false) }
-    LaunchedEffect(signalMode) {
-        if (signalMode != SignalMode.OFF) {
+    LaunchedEffect(vm.signalMode) {
+        if (vm.signalMode != SignalMode.OFF) {
             while (true) {
                 isBlinkOn = !isBlinkOn
                 delay(500)
@@ -144,40 +193,37 @@ fun ControllerScreen() {
             isBlinkOn = false
         }
     }
+
     // Autocancel turn signal logic
     var maxSteerRight by remember { mutableFloatStateOf(0f) }
     var maxSteerLeft by remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(steeringAngle) {
-        if (signalMode == SignalMode.RIGHT) {
-            if (steeringAngle > 90f) maxSteerRight = maxOf(maxSteerRight, steeringAngle)
-            // Jika pernah lewat 90 derajat, lalu kembali di bawah 90 derajat -> Matikan Sein
-            if (maxSteerRight > 90f && steeringAngle < 90f) {
-                signalMode = SignalMode.OFF
+    LaunchedEffect(vm.steeringAngle) {
+        if (vm.signalMode == SignalMode.RIGHT) {
+            if (vm.steeringAngle > 90f) maxSteerRight = maxOf(maxSteerRight, vm.steeringAngle)
+            if (maxSteerRight > 90f && vm.steeringAngle < 90f) {
+                vm.signalMode = SignalMode.OFF
                 maxSteerRight = 0f
             }
         } else { maxSteerRight = 0f }
 
-        if (signalMode == SignalMode.LEFT) {
-            if (steeringAngle < -90f) maxSteerLeft = minOf(maxSteerLeft, steeringAngle)
-            // Jika pernah lewat -90 derajat, lalu kembali di atas -90 derajat -> Matikan Sein
-            if (maxSteerLeft < -90f && steeringAngle > -90f) {
-                signalMode = SignalMode.OFF
+        if (vm.signalMode == SignalMode.LEFT) {
+            if (vm.steeringAngle < -90f) maxSteerLeft = minOf(maxSteerLeft, vm.steeringAngle)
+            if (maxSteerLeft < -90f && vm.steeringAngle > -90f) {
+                vm.signalMode = SignalMode.OFF
                 maxSteerLeft = 0f
             }
         } else { maxSteerLeft = 0f }
     }
 
-    ConstraintLayout(
-        modifier = Modifier.fillMaxSize()
-    ) {
+    ConstraintLayout(modifier = Modifier.fillMaxSize()) {
         val (
             topBar, steering, signals, engine,
             gasPedalRef, brakePedalRef, parkingBrake,
             shifter, leftGroup, cruiseGroup
         ) = createRefs()
 
-        // 1. HEADER / TOP BAR
+        // 1. HEADER
         Row(
             modifier = Modifier
                 .constrainAs(topBar) {
@@ -195,37 +241,33 @@ fun ControllerScreen() {
                 painter = painterResource(id = android.R.drawable.ic_menu_sort_by_size),
                 contentDescription = "Menu"
             )
-            androidx.compose.material3.Text(
-                text = "EURO TRUCK SIMULATOR 2 CONTROLLER",
-                color = Color.Black
-            )
+            androidx.compose.material3.Text("EURO TRUCK SIMULATOR 2 CONTROLLER", color = Color.Black)
             Box(
                 modifier = Modifier
                     .size(16.dp)
                     .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(if (isConnected) Color.Green else Color.Red) // DINAMIS
+                    .background(if (vm.isConnected) Color.Green else Color.Red)
             )
         }
 
-        // 2. LEFT CONTROL GROUP (Lampu, Wiper, Lane Assist, Horn)
+        // 2. LEFT GROUP
         Row(modifier = Modifier.constrainAs(leftGroup) {
             top.linkTo(topBar.bottom, margin = 16.dp)
             start.linkTo(parent.start, margin = 16.dp)
         }) {
-            // 1. Lampu Siklus Utama (Kiri)
             ToggleIconButton(
-                icon = when(lightMode) {
+                icon = when(vm.lightMode) {
                     LightMode.OFF, LightMode.PARKING -> R.drawable.parking_light
                     LightMode.LOW_BEAM -> R.drawable.low_beam
                 },
-                isActive = lightMode != LightMode.OFF,
-                activeColor = when(lightMode) {
+                isActive = vm.lightMode != LightMode.OFF,
+                activeColor = when(vm.lightMode) {
                     LightMode.OFF -> Color.Black
                     LightMode.PARKING -> Color.Cyan
                     LightMode.LOW_BEAM -> Color(0xFFFFA500)
                 }
             ) {
-                lightMode = when(lightMode) {
+                vm.lightMode = when(vm.lightMode) {
                     LightMode.OFF -> LightMode.PARKING
                     LightMode.PARKING -> LightMode.LOW_BEAM
                     LightMode.LOW_BEAM -> LightMode.OFF
@@ -234,48 +276,46 @@ fun ControllerScreen() {
             Spacer(modifier = Modifier.width(16.dp))
 
             ToggleIconButton(
-                icon = R.drawable.high_beam, // Pastikan Anda memiliki aset ini
-                isActive = isHighBeamOn,
+                icon = R.drawable.high_beam,
+                isActive = vm.isHighBeamOn,
                 activeColor = Color.Blue
-            ) { isHighBeamOn = !isHighBeamOn }
+            ) { vm.isHighBeamOn = !vm.isHighBeamOn }
             Spacer(modifier = Modifier.width(16.dp))
 
-            // Wipers
             MomentaryIconButton(
                 icon = R.drawable.wiper,
                 activeColor = Color.Cyan,
-                onPressChange = { isWiperPressed = it }
+                onPressChange = { vm.isWiperPressed = it }
             )
             Spacer(modifier = Modifier.width(16.dp))
 
-            // Lane Assist
             ToggleIconButton(
                 icon = R.drawable.lane_assist,
-                isActive = isLaneAssistOn,
+                isActive = vm.isLaneAssistOn,
                 activeColor = Color.Green
-            ) { isLaneAssistOn = !isLaneAssistOn }
+            ) { vm.isLaneAssistOn = !vm.isLaneAssistOn }
             Spacer(modifier = Modifier.width(16.dp))
 
             MomentaryIconButton(
                 icon = R.drawable.horn,
                 activeColor = Color.DarkGray,
-                onPressChange = { isHornPressed = it }
+                onPressChange = { vm.isHornPressed = it }
             )
         }
 
-        // 4. STEERING WHEEL
+        // 4. STEERING
         SteeringWheel(
             modifier = Modifier
-                .size(170.dp) // Ukuran modifikasi Anda
+                .size(170.dp)
                 .constrainAs(steering) {
                     start.linkTo(parent.start, margin = 32.dp)
                     bottom.linkTo(parent.bottom, margin = 16.dp)
                 },
-            angle = steeringAngle,
-            onAngleChanged = { steeringAngle = it }
+            angle = vm.steeringAngle,
+            onAngleChanged = { vm.steeringAngle = it }
         )
 
-        // 5. TURN SIGNALS & HAZARD
+        // 5. SIGNALS
         Row(
             modifier = Modifier.constrainAs(signals) {
                 bottom.linkTo(steering.top, margin = 12.dp)
@@ -284,32 +324,32 @@ fun ControllerScreen() {
             },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            SignalButton(R.drawable.left_turn_signal, signalMode == SignalMode.LEFT && isBlinkOn, Color.Green) {
-                signalMode = if (signalMode == SignalMode.LEFT) SignalMode.OFF else SignalMode.LEFT
+            SignalButton(R.drawable.left_turn_signal, vm.signalMode == SignalMode.LEFT && isBlinkOn, Color.Green) {
+                vm.signalMode = if (vm.signalMode == SignalMode.LEFT) SignalMode.OFF else SignalMode.LEFT
             }
             Spacer(modifier = Modifier.width(16.dp))
-            SignalButton(R.drawable.hazard_signal, signalMode == SignalMode.HAZARD && isBlinkOn, Color.Red) {
-                signalMode = if (signalMode == SignalMode.HAZARD) SignalMode.OFF else SignalMode.HAZARD
+            SignalButton(R.drawable.hazard_signal, vm.signalMode == SignalMode.HAZARD && isBlinkOn, Color.Red) {
+                vm.signalMode = if (vm.signalMode == SignalMode.HAZARD) SignalMode.OFF else SignalMode.HAZARD
             }
             Spacer(modifier = Modifier.width(16.dp))
-            SignalButton(R.drawable.right_turn_signal, signalMode == SignalMode.RIGHT && isBlinkOn, Color.Green) {
-                signalMode = if (signalMode == SignalMode.RIGHT) SignalMode.OFF else SignalMode.RIGHT
+            SignalButton(R.drawable.right_turn_signal, vm.signalMode == SignalMode.RIGHT && isBlinkOn, Color.Green) {
+                vm.signalMode = if (vm.signalMode == SignalMode.RIGHT) SignalMode.OFF else SignalMode.RIGHT
             }
         }
 
-        // 6. ENGINE START/STOP
+        // 6. ENGINE
         ToggleIconButton(
             icon = R.drawable.engine_start_stop,
-            isActive = isEngineOn,
+            isActive = vm.isEngineOn,
             activeColor = Color.Green,
             modifier = Modifier.constrainAs(engine) {
                 bottom.linkTo(parent.bottom, margin = 16.dp)
                 start.linkTo(steering.end)
                 end.linkTo(brakePedalRef.start)
             }
-        ) { isEngineOn = !isEngineOn }
+        ) { vm.isEngineOn = !vm.isEngineOn }
 
-        // 7. CRUISE CONTROL GROUP (Rasio 2:1 diterapkan via buttonSize)
+        // 7. CRUISE
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.constrainAs(cruiseGroup) {
@@ -320,22 +360,23 @@ fun ControllerScreen() {
             MomentaryIconButton(
                 icon = R.drawable.cruise_arrow,
                 buttonSize = 25.dp,
-                onPressChange = { isCruiseUpPressed = it }
+                onPressChange = { vm.isCruiseUpPressed = it }
             )
             ToggleIconButton(
                 icon = R.drawable.cruise_control_toggle,
-                isActive = isCruiseOn,
+                isActive = vm.isCruiseOn,
                 activeColor = Color.Green,
                 buttonSize = 50.dp
-            ) { isCruiseOn = !isCruiseOn }
+            ) { vm.isCruiseOn = !vm.isCruiseOn }
             MomentaryIconButton(
                 icon = R.drawable.cruise_arrow,
                 modifier = Modifier.graphicsLayer { rotationZ = 180f },
                 buttonSize = 25.dp,
-                onPressChange = { isCruiseDownPressed = it }
+                onPressChange = { vm.isCruiseDownPressed = it }
             )
         }
 
+        // 8. SHIFTER
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.constrainAs(shifter) {
@@ -348,48 +389,45 @@ fun ControllerScreen() {
                 activeColor = Color.DarkGray,
                 modifier = Modifier.graphicsLayer { rotationZ = -90f },
                 buttonSize = 50.dp,
-                onPressChange = { isShifterUpPressed = it }
+                onPressChange = { vm.isShifterUpPressed = it }
             )
             MomentaryIconButton(
                 icon = R.drawable.shifter_arrow,
                 activeColor = Color.DarkGray,
                 modifier = Modifier.graphicsLayer { rotationZ = 90f },
                 buttonSize = 50.dp,
-                onPressChange = { isShifterDownPressed = it }
+                onPressChange = { vm.isShifterDownPressed = it }
             )
         }
 
-        // 9. GAS PEDAL (Digeser jauh dari Shifter agar tidak clipping)
+        // 9. GAS
         Box(modifier = Modifier.constrainAs(gasPedalRef) {
             bottom.linkTo(parent.bottom, margin = 16.dp)
-            end.linkTo(shifter.start, margin = 32.dp) // Jarak aman dari shifter
+            end.linkTo(shifter.start, margin = 32.dp)
         }) {
-            Pedal(R.drawable.gas_pedal, gasValue) { gasValue = it }
+            Pedal(R.drawable.gas_pedal, vm.gasValue) { vm.gasValue = it }
         }
 
-        // 10. BRAKE PEDAL (Di sebelah kiri Gas)
+        // 10. BRAKE
         Box(modifier = Modifier.constrainAs(brakePedalRef) {
             bottom.linkTo(parent.bottom, margin = 16.dp)
             end.linkTo(gasPedalRef.start, margin = 10.dp)
         }) {
-            Pedal(R.drawable.brake_pedal, brakeValue) {
-                brakeValue = it
-                if (it > 0.05f) isCruiseOn = false
-            }
+            Pedal(R.drawable.brake_pedal, vm.brakeValue) { vm.setBrake(it) }
         }
 
-        // 11. PARKING BRAKE (Akurat tepat di atas Brake Pedal)
+        // 11. PARKING BRAKE
         ToggleIconButton(
             icon = R.drawable.parking_brake,
-            isActive = isParkingBrakeOn,
+            isActive = vm.isParkingBrakeOn,
             activeColor = Color.Red,
             buttonSize = 36.dp,
             modifier = Modifier.constrainAs(parkingBrake) {
-                bottom.linkTo(brakePedalRef.top, margin = 16.dp) // Patokan bawahnya adalah atas rem
-                start.linkTo(brakePedalRef.start)                // Rata Kiri rem
-                end.linkTo(brakePedalRef.end)                  // Rata Kanan rem
+                bottom.linkTo(brakePedalRef.top, margin = 16.dp)
+                start.linkTo(brakePedalRef.start)
+                end.linkTo(brakePedalRef.end)
             }
-        ) { isParkingBrakeOn = !isParkingBrakeOn }
+        ) { vm.isParkingBrakeOn = !vm.isParkingBrakeOn }
     }
 }
 
