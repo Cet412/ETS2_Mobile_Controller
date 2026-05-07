@@ -32,6 +32,8 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.Locale
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 
 // Enum untuk status kontrol
@@ -59,7 +61,7 @@ fun ControllerScreen() {
     var isHighBeamOn by remember { mutableStateOf(false) }
     var signalMode by remember { mutableStateOf(SignalMode.OFF) }
     var isEngineOn by remember { mutableStateOf(false) }
-    var isWiperOn by remember { mutableStateOf(false) }
+    var isWiperPressed by remember { mutableStateOf(false) }
     var isConnected by remember { mutableStateOf(false) }
 
     // State Management Toggle
@@ -74,41 +76,47 @@ fun ControllerScreen() {
     var isCruiseUpPressed by remember { mutableStateOf(false) }
     var isCruiseDownPressed by remember { mutableStateOf(false) }
 
-    // UDP TRANSMITTER LOOP
+    // UDP TRANSMITTER LOOP (16-Byte Bitwise Payload)
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             var socket: DatagramSocket? = null
             try {
                 socket = DatagramSocket()
-                val serverAddress = InetAddress.getByName("10.229.62.195") // IP Hotspot Anda
+                val serverAddress = InetAddress.getByName("10.229.62.195") // IP PC/Hotspot
                 val port = 65432
 
-                while (true) {
-                    val payload = String.format(
-                        Locale.US,
-                        "ST:%.1f|G:%.2f|B:%.2f|PB:%d|L:%d|HB:%d|S:%d|H:%d|SU:%d|SD:%d|CU:%d|CT:%d|CD:%d|LA:%d|E:%d|W:%d",
-                        steeringAngle, gasValue, brakeValue,
-                        if (isParkingBrakeOn) 1 else 0,
-                        lightMode.ordinal,
-                        if (isHighBeamOn) 1 else 0,
-                        signalMode.ordinal,
-                        if (isHornPressed) 1 else 0,
-                        if (isShifterUpPressed) 1 else 0,
-                        if (isShifterDownPressed) 1 else 0,
-                        if (isCruiseUpPressed) 1 else 0,
-                        if (isCruiseOn) 1 else 0,
-                        if (isCruiseDownPressed) 1 else 0,
-                        if (isLaneAssistOn) 1 else 0,
-                        if (isEngineOn) 1 else 0,
-                        if (isWiperOn) 1 else 0
-                    )
+                // Pre-alokasi buffer statis untuk mencegah GC Thrashing
+                val buffer = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
 
-                    val buffer = payload.toByteArray()
-                    val packet = DatagramPacket(buffer, buffer.size, serverAddress, port)
+                while (true) {
+                    // Kompresi boolean dan enum ke dalam 1 Integer (32-bit)
+                    var buttonsMask = 0
+                    if (isParkingBrakeOn) buttonsMask = buttonsMask or (1 shl 0)
+                    buttonsMask = buttonsMask or (lightMode.ordinal shl 1) // 2 bit
+                    if (isHighBeamOn) buttonsMask = buttonsMask or (1 shl 3)
+                    buttonsMask = buttonsMask or (signalMode.ordinal shl 4) // 2 bit
+                    if (isHornPressed) buttonsMask = buttonsMask or (1 shl 6)
+                    if (isShifterUpPressed) buttonsMask = buttonsMask or (1 shl 7)
+                    if (isShifterDownPressed) buttonsMask = buttonsMask or (1 shl 8)
+                    if (isCruiseUpPressed) buttonsMask = buttonsMask or (1 shl 9)
+                    if (isCruiseOn) buttonsMask = buttonsMask or (1 shl 10)
+                    if (isCruiseDownPressed) buttonsMask = buttonsMask or (1 shl 11)
+                    if (isLaneAssistOn) buttonsMask = buttonsMask or (1 shl 12)
+                    if (isEngineOn) buttonsMask = buttonsMask or (1 shl 13)
+                    if (isWiperPressed) buttonsMask = buttonsMask or (1 shl 14)
+
+                    // Injeksi data ke buffer
+                    buffer.clear()
+                    buffer.putFloat(steeringAngle)
+                    buffer.putFloat(gasValue)
+                    buffer.putFloat(brakeValue)
+                    buffer.putInt(buttonsMask)
+
+                    val packet = DatagramPacket(buffer.array(), 16, serverAddress, port)
 
                     try {
                         socket.send(packet)
-                        isConnected = true // Jika berhasil terkirim, ubah ke Hijau
+                        isConnected = true
                     } catch (e: Exception) {
                         isConnected = false
                     }
@@ -124,7 +132,7 @@ fun ControllerScreen() {
         }
     }
 
-    // Blinking Logic
+    //  Blinking Logic
     var isBlinkOn by remember { mutableStateOf(false) }
     LaunchedEffect(signalMode) {
         if (signalMode != SignalMode.OFF) {
@@ -233,11 +241,11 @@ fun ControllerScreen() {
             Spacer(modifier = Modifier.width(16.dp))
 
             // Wipers
-            ToggleIconButton(
+            MomentaryIconButton(
                 icon = R.drawable.wiper,
-                isActive = isWiperOn,
-                activeColor = Color.Cyan
-            ) { isWiperOn = !isWiperOn }
+                activeColor = Color.Cyan,
+                onPressChange = { isWiperPressed = it }
+            )
             Spacer(modifier = Modifier.width(16.dp))
 
             // Lane Assist
@@ -364,7 +372,10 @@ fun ControllerScreen() {
             bottom.linkTo(parent.bottom, margin = 16.dp)
             end.linkTo(gasPedalRef.start, margin = 10.dp)
         }) {
-            Pedal(R.drawable.brake_pedal, brakeValue) { brakeValue = it }
+            Pedal(R.drawable.brake_pedal, brakeValue) {
+                brakeValue = it
+                if (it > 0.05f) isCruiseOn = false
+            }
         }
 
         // 11. PARKING BRAKE (Akurat tepat di atas Brake Pedal)

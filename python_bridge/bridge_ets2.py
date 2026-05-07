@@ -1,6 +1,7 @@
 import socket
 import time
 import vgamepad as vg
+import struct
 
 UDP_IP = "0.0.0.0" 
 UDP_PORT = 65432
@@ -14,11 +15,10 @@ def main():
     
     # Menambahkan Tracker untuk E (Engine), W (Wiper), HB (High Beam)
     prev_states = {
-        'PB': 0, 'L': 0, 'HB': 0, 'S': 0, 'CT': 0, 'LA': 0, 'E': 0, 'W': 0
+        'PB': 0, 'L': 0, 'HB': 0, 'S': 0, 'CT': 0, 'LA': 0, 'E': 0
     }
     
     active_pulses = {}
-    active_axis_pulses = {} # Tracker khusus untuk Axis (Analog) Pulses
     PULSE_DURATION = 0.1 
 
     print(f"Server Aktif. Mendengarkan paket UDP di Port {UDP_PORT}...")
@@ -26,11 +26,6 @@ def main():
     def trigger_pulse(button):
         gamepad.press_button(button=button)
         active_pulses[button] = time.time() + PULSE_DURATION
-        
-    def trigger_axis_pulse_up():
-        """Menggunakan Joystick Kanan didorong ke atas sebagai tombol pulsa"""
-        gamepad.right_joystick_float(x_value_float=0.0, y_value_float=1.0)
-        active_axis_pulses['wiper'] = time.time() + PULSE_DURATION
 
     try:
         while True:
@@ -41,95 +36,99 @@ def main():
                 if current_time >= exp_time:
                     gamepad.release_button(button=btn)
                     del active_pulses[btn]
-                    
-            # Reset analog virtual
-            for axis, exp_time in list(active_axis_pulses.items()):
-                if current_time >= exp_time:
-                    if axis == 'wiper':
-                        gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
-                    del active_axis_pulses[axis]
 
-            data, addr = sock.recvfrom(1024)
-            payload = data.decode('utf-8')
+            data, addr = sock.recvfrom(16)
+            if len(data) != 16:
+                continue
 
+            # Unpack struktur biner Little-Endian: 3 Float, 1 Unsigned Int (<fffI)
             try:
-                state = {}
-                for part in payload.split('|'):
-                    if ':' in part:
-                        k, v = part.split(':')
-                        state[k] = float(v) if '.' in v else int(v)
-            except ValueError:
-                continue 
+                st_raw, gas_raw, brake_raw, btn_mask = struct.unpack('<fffI', data)
+            except struct.error:
+                continue
 
-            # ST (Setir): Skala diperbarui ke 360.0 mengikuti revisi Kotlin!
-            st_val = state.get('ST', 0.0) / 360.0
-            st_val = max(min(st_val, 1.0), -1.0) 
+            # Ekstraksi Bitmask
+            pb_state = (btn_mask >> 0) & 1
+            light_state = (btn_mask >> 1) & 3
+            hb_state = (btn_mask >> 3) & 1
+            signal_state = (btn_mask >> 4) & 3
+            horn_state = (btn_mask >> 6) & 1
+            su_state = (btn_mask >> 7) & 1
+            sd_state = (btn_mask >> 8) & 1
+            cu_state = (btn_mask >> 9) & 1
+            ct_state = (btn_mask >> 10) & 1
+            cd_state = (btn_mask >> 11) & 1
+            la_state = (btn_mask >> 12) & 1
+            e_state = (btn_mask >> 13) & 1
+            w_state = (btn_mask >> 14) & 1
+
+            # ==========================================
+            # A. PEMETAAN AXIS ANALOG
+            # ==========================================
+            st_val = max(min(st_raw / 360.0, 1.0), -1.0) 
             gamepad.left_joystick_float(x_value_float=st_val, y_value_float=0.0)
+            gamepad.right_trigger_float(value_float=gas_raw)
+            gamepad.left_trigger_float(value_float=brake_raw)
 
-            gamepad.right_trigger_float(value_float=state.get('G', 0.0))
-            gamepad.left_trigger_float(value_float=state.get('B', 0.0))
-
-            # Momentary Buttons
-            if state.get('H', 0) == 1: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
+            # ==========================================
+            # B. PEMETAAN TOMBOL MOMENTARY (Hold)
+            # ==========================================
+            if horn_state: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
             else: gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
 
-            if state.get('SU', 0) == 1: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER)
+            if su_state: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER)
             else: gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER)
 
-            if state.get('SD', 0) == 1: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER)
+            if sd_state: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER)
             else: gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER)
 
-            if state.get('CU', 0) == 1: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP)
+            if cu_state: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP)
             else: gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP)
 
-            if state.get('CD', 0) == 1: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN)
+            if cd_state: gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN)
             else: gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN)
 
-            # Toggle Buttons (Edge Detection)
-            if state.get('PB', 0) != prev_states['PB']:
+            if w_state: gamepad.right_joystick_float(x_value_float=0.0, y_value_float=1.0)
+            else: gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
+
+            # ==========================================
+            # C. PEMETAAN TOMBOL TOGGLE (Edge Detection)
+            # ==========================================
+            if pb_state != prev_states['PB']:
                 trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_B)
-                prev_states['PB'] = state.get('PB', 0)
+                prev_states['PB'] = pb_state
 
-            if state.get('CT', 0) != prev_states['CT']:
+            if ct_state != prev_states['CT']:
                 trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
-                prev_states['CT'] = state.get('CT', 0)
+                prev_states['CT'] = ct_state
 
-            if state.get('LA', 0) != prev_states['LA']:
+            if la_state != prev_states['LA']:
                 trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
-                prev_states['LA'] = state.get('LA', 0)
+                prev_states['LA'] = la_state
 
-            if state.get('L', 0) != prev_states['L']:
+            if light_state != prev_states['L']:
                 trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
-                prev_states['L'] = state.get('L', 0)
+                prev_states['L'] = light_state
 
-            # HIGH BEAM -> Right Thumb Click (RSB)
-            if state.get('HB', 0) != prev_states['HB']:
+            if hb_state != prev_states['HB']:
                 trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB)
-                prev_states['HB'] = state.get('HB', 0)
+                prev_states['HB'] = hb_state
                 
-            # ENGINE START/STOP -> Start Button
-            if state.get('E', 0) != prev_states['E']:
+            if e_state != prev_states['E']:
                 trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_START)
-                prev_states['E'] = state.get('E', 0)
-                
-            # WIPER -> Right Joystick Push UP
-            if state.get('W', 0) != prev_states['W']:
-                trigger_axis_pulse_up()
-                prev_states['W'] = state.get('W', 0)
+                prev_states['E'] = e_state
 
-            # Signal Logic
-            curr_s = state.get('S', 0)
-            if curr_s != prev_states['S']:
-                if curr_s == 1: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT)
-                elif curr_s == 2: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT)
-                elif curr_s == 3: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK)
+            if signal_state != prev_states['S']:
+                if signal_state == 1: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT)
+                elif signal_state == 2: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT)
+                elif signal_state == 3: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK)
                 
-                elif curr_s == 0:
+                elif signal_state == 0:
                     if prev_states['S'] == 1: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT)
                     elif prev_states['S'] == 2: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT)
                     elif prev_states['S'] == 3: trigger_pulse(vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK)
                 
-                prev_states['S'] = curr_s
+                prev_states['S'] = signal_state
 
             gamepad.update()
 
