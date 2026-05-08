@@ -23,14 +23,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.constraintlayout.compose.ConstraintLayout
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlin.math.atan2
 import androidx.compose.ui.graphics.drawscope.clipRect
+import kotlinx.coroutines.launch
 
-// ==========================================
-// 3. ACTIVITY ENTRI
-// ==========================================
 class MainActivity : ComponentActivity() {
     private val viewModel: ControllerViewModel by viewModels()
 
@@ -44,54 +40,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// ==========================================
-// 4. UI LAYER (Dumb Component)
-// ==========================================
 @Composable
 fun ControllerScreen(vm: ControllerViewModel) {
-    // Blinking Logic
-    var isBlinkOn by remember { mutableStateOf(false) }
-    LaunchedEffect(vm.signalMode) {
-        if (vm.signalMode != SignalMode.OFF) {
-            while (true) {
-                isBlinkOn = !isBlinkOn
-                delay(500)
-            }
-        } else {
-            isBlinkOn = false
-        }
-    }
-
-    // Autocancel turn signal logic
-    var maxSteerRight by remember { mutableFloatStateOf(0f) }
-    var maxSteerLeft by remember { mutableFloatStateOf(0f) }
-
-    LaunchedEffect(vm.steeringAngle) {
-        if (vm.signalMode == SignalMode.RIGHT) {
-            if (vm.steeringAngle > 90f) maxSteerRight = maxOf(maxSteerRight, vm.steeringAngle)
-            if (maxSteerRight > 90f && vm.steeringAngle < 90f) {
-                vm.signalMode = SignalMode.OFF
-                maxSteerRight = 0f
-            }
-        } else { maxSteerRight = 0f }
-
-        if (vm.signalMode == SignalMode.LEFT) {
-            if (vm.steeringAngle < -90f) maxSteerLeft = minOf(maxSteerLeft, vm.steeringAngle)
-            if (maxSteerLeft < -90f && vm.steeringAngle > -90f) {
-                vm.signalMode = SignalMode.OFF
-                maxSteerLeft = 0f
-            }
-        } else { maxSteerLeft = 0f }
-    }
-
     ConstraintLayout(modifier = Modifier.fillMaxSize()) {
         val (
-            topBar, dashboard, steering, signals, engine, // Tambahkan 'dashboard' disini
+            topBar, steering, signals, engine,
             gasPedalRef, brakePedalRef, parkingBrake,
             shifter, leftGroup, cruiseGroup
         ) = createRefs()
 
-        // 1. HEADER
         Row(
             modifier = Modifier
                 .constrainAs(topBar) {
@@ -118,84 +75,46 @@ fun ControllerScreen(vm: ControllerViewModel) {
             )
         }
 
-        // 2. LEFT GROUP
+        // LEFT GROUP
         Row(modifier = Modifier.constrainAs(leftGroup) {
             top.linkTo(topBar.bottom, margin = 16.dp)
             start.linkTo(parent.start, margin = 16.dp)
         }) {
-            ToggleIconButton(
-                icon = when(vm.lightMode) {
-                    LightMode.OFF, LightMode.PARKING -> R.drawable.parking_light
-                    LightMode.LOW_BEAM -> R.drawable.low_beam
-                },
-                isActive = vm.lightMode != LightMode.OFF,
-                activeColor = when(vm.lightMode) {
-                    LightMode.OFF -> Color.Black
-                    LightMode.PARKING -> Color.Cyan
-                    LightMode.LOW_BEAM -> Color(0xFFFFA500)
-                }
-            ) {
-                vm.lightMode = when(vm.lightMode) {
-                    LightMode.OFF -> LightMode.PARKING
-                    LightMode.PARKING -> LightMode.LOW_BEAM
-                    LightMode.LOW_BEAM -> LightMode.OFF
-                }
-            }
+            SmartLightButton(
+                lightMode = vm.telemLightMode,
+                onInputStateChange = { vm.inLight = it }
+            )
             Spacer(modifier = Modifier.width(16.dp))
-
-            ToggleIconButton(
+            SmartTelemetryButton(
                 icon = R.drawable.high_beam,
-                isActive = vm.isHighBeamOn,
-                activeColor = Color.Blue
-            ) { vm.isHighBeamOn = !vm.isHighBeamOn }
+                isActiveTelemetry = vm.telemHighBeam,
+                activeColor = Color.Blue,
+                onInputStateChange = { vm.inHighBeam = it }
+            )
             Spacer(modifier = Modifier.width(16.dp))
-
-            MomentaryIconButton(
+            SmartTelemetryButton(
                 icon = R.drawable.wiper,
+                isActiveTelemetry = vm.telemWiper,
                 activeColor = Color.Cyan,
-                onPressChange = { vm.isWiperPressed = it }
+                onInputStateChange = { vm.inWiper = it }
             )
             Spacer(modifier = Modifier.width(16.dp))
-
-            ToggleIconButton(
+            SmartTelemetryButton(
                 icon = R.drawable.lane_assist,
-                isActive = vm.isLaneAssistOn,
-                activeColor = Color.Green
-            ) { vm.isLaneAssistOn = !vm.isLaneAssistOn }
+                isActiveTelemetry = vm.inLaneAssist,
+                activeColor = Color.Green,
+                onInputStateChange = { vm.inLaneAssist = it }
+            )
             Spacer(modifier = Modifier.width(16.dp))
-
-            MomentaryIconButton(
+            SmartTelemetryButton(
                 icon = R.drawable.horn,
+                isActiveTelemetry = vm.inHorn, // Horn tidak ada telemetri, fallback ke input lokal
                 activeColor = Color.DarkGray,
-                onPressChange = { vm.isHornPressed = it }
+                onInputStateChange = { vm.inHorn = it }
             )
         }
 
-        // ==========================================
-        // UI DASHBOARD TELEMETRI
-        // ==========================================
-        Row(
-            modifier = Modifier
-                .constrainAs(dashboard) {
-                    top.linkTo(topBar.bottom, margin = 16.dp)
-                    start.linkTo(parent.start)
-                    end.linkTo(parent.end)
-                }
-                .background(Color(0xAA000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                .padding(horizontal = 24.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            androidx.compose.material3.Text(text = "RPM: ${vm.engineRpm.toInt()}", color = Color.White)
-            androidx.compose.material3.Text(
-                text = "GEAR: ${if (vm.gear == 0) "N" else if (vm.gear < 0) "R" else vm.gear}",
-                color = Color.White
-            )
-            androidx.compose.material3.Text(text = "SPEED: ${vm.speedKmh.toInt()} KM/H", color = Color.Cyan)
-            androidx.compose.material3.Text(text = "FUEL: ${vm.fuelCapacity.toInt()}L", color = Color.White)
-        }
-
-        // 4. STEERING
+        // STEERING WHEEL (Skala 900 Derajat Lock-to-Lock)
         SteeringWheel(
             modifier = Modifier
                 .size(170.dp)
@@ -207,7 +126,7 @@ fun ControllerScreen(vm: ControllerViewModel) {
             onAngleChanged = { vm.steeringAngle = it }
         )
 
-        // 5. SIGNALS
+        // SIGNALS & HAZARD
         Row(
             modifier = Modifier.constrainAs(signals) {
                 bottom.linkTo(steering.top, margin = 12.dp)
@@ -216,32 +135,45 @@ fun ControllerScreen(vm: ControllerViewModel) {
             },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            SignalButton(R.drawable.left_turn_signal, vm.signalMode == SignalMode.LEFT && isBlinkOn, Color.Green) {
-                vm.signalMode = if (vm.signalMode == SignalMode.LEFT) SignalMode.OFF else SignalMode.LEFT
-            }
+            SmartTelemetryButton(
+                icon = R.drawable.left_turn_signal,
+                isActiveTelemetry = vm.telemSigLeft,
+                activeColor = Color.Green,
+                buttonSize = 30.dp,
+                onInputStateChange = { vm.inSigLeft = it }
+            )
             Spacer(modifier = Modifier.width(16.dp))
-            SignalButton(R.drawable.hazard_signal, vm.signalMode == SignalMode.HAZARD && isBlinkOn, Color.Red) {
-                vm.signalMode = if (vm.signalMode == SignalMode.HAZARD) SignalMode.OFF else SignalMode.HAZARD
-            }
+            SmartTelemetryButton(
+                icon = R.drawable.hazard_signal,
+                isActiveTelemetry = vm.telemSigLeft && vm.telemSigRight,
+                activeColor = Color.Red,
+                buttonSize = 30.dp,
+                onInputStateChange = { vm.inHazard = it }
+            )
             Spacer(modifier = Modifier.width(16.dp))
-            SignalButton(R.drawable.right_turn_signal, vm.signalMode == SignalMode.RIGHT && isBlinkOn, Color.Green) {
-                vm.signalMode = if (vm.signalMode == SignalMode.RIGHT) SignalMode.OFF else SignalMode.RIGHT
-            }
+            SmartTelemetryButton(
+                icon = R.drawable.right_turn_signal,
+                isActiveTelemetry = vm.telemSigRight,
+                activeColor = Color.Green,
+                buttonSize = 30.dp,
+                onInputStateChange = { vm.inSigRight = it }
+            )
         }
 
-        // 6. ENGINE
-        ToggleIconButton(
+        // ENGINE
+        SmartTelemetryButton(
             icon = R.drawable.engine_start_stop,
-            isActive = vm.isEngineOn,
+            isActiveTelemetry = vm.telemEngine,
             activeColor = Color.Green,
             modifier = Modifier.constrainAs(engine) {
                 bottom.linkTo(parent.bottom, margin = 16.dp)
                 start.linkTo(steering.end)
                 end.linkTo(brakePedalRef.start)
-            }
-        ) { vm.isEngineOn = !vm.isEngineOn }
+            },
+            onInputStateChange = { vm.inEngine = it }
+        )
 
-        // 7. CRUISE
+        // CRUISE
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.constrainAs(cruiseGroup) {
@@ -249,26 +181,29 @@ fun ControllerScreen(vm: ControllerViewModel) {
                 end.linkTo(parent.end, margin = 32.dp)
             }
         ) {
-            MomentaryIconButton(
+            SmartTelemetryButton(
                 icon = R.drawable.cruise_arrow,
+                isActiveTelemetry = vm.inCruiseUp,
                 buttonSize = 25.dp,
-                onPressChange = { vm.isCruiseUpPressed = it }
+                onInputStateChange = { vm.inCruiseUp = it }
             )
-            ToggleIconButton(
+            SmartTelemetryButton(
                 icon = R.drawable.cruise_control_toggle,
-                isActive = vm.isCruiseOn,
+                isActiveTelemetry = vm.telemCruise,
                 activeColor = Color.Green,
-                buttonSize = 50.dp
-            ) { vm.isCruiseOn = !vm.isCruiseOn }
-            MomentaryIconButton(
+                buttonSize = 50.dp,
+                onInputStateChange = { vm.inCruiseToggle = it }
+            )
+            SmartTelemetryButton(
                 icon = R.drawable.cruise_arrow,
+                isActiveTelemetry = vm.inCruiseDown,
                 modifier = Modifier.graphicsLayer { rotationZ = 180f },
                 buttonSize = 25.dp,
-                onPressChange = { vm.isCruiseDownPressed = it }
+                onInputStateChange = { vm.inCruiseDown = it }
             )
         }
 
-        // 8. SHIFTER
+        // SHIFTER
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.constrainAs(shifter) {
@@ -276,23 +211,25 @@ fun ControllerScreen(vm: ControllerViewModel) {
                 end.linkTo(parent.end, margin = 24.dp)
             }
         ) {
-            MomentaryIconButton(
+            SmartTelemetryButton(
                 icon = R.drawable.shifter_arrow,
+                isActiveTelemetry = vm.inShifterUp,
                 activeColor = Color.DarkGray,
                 modifier = Modifier.graphicsLayer { rotationZ = -90f },
                 buttonSize = 50.dp,
-                onPressChange = { vm.isShifterUpPressed = it }
+                onInputStateChange = { vm.inShifterUp = it }
             )
-            MomentaryIconButton(
+            SmartTelemetryButton(
                 icon = R.drawable.shifter_arrow,
+                isActiveTelemetry = vm.inShifterDown,
                 activeColor = Color.DarkGray,
                 modifier = Modifier.graphicsLayer { rotationZ = 90f },
                 buttonSize = 50.dp,
-                onPressChange = { vm.isShifterDownPressed = it }
+                onInputStateChange = { vm.inShifterDown = it }
             )
         }
 
-        // 9. GAS
+        // GAS
         Box(modifier = Modifier.constrainAs(gasPedalRef) {
             bottom.linkTo(parent.bottom, margin = 16.dp)
             end.linkTo(shifter.start, margin = 32.dp)
@@ -300,64 +237,47 @@ fun ControllerScreen(vm: ControllerViewModel) {
             Pedal(R.drawable.gas_pedal, vm.gasValue) { vm.gasValue = it }
         }
 
-        // 10. BRAKE
+        // BRAKE
         Box(modifier = Modifier.constrainAs(brakePedalRef) {
             bottom.linkTo(parent.bottom, margin = 16.dp)
             end.linkTo(gasPedalRef.start, margin = 10.dp)
         }) {
-            Pedal(R.drawable.brake_pedal, vm.brakeValue) { vm.setBrake(it) }
+            Pedal(R.drawable.brake_pedal, vm.brakeValue) { vm.brakeValue = it }
         }
 
-        // 11. PARKING BRAKE
-        ToggleIconButton(
+        // PARKING BRAKE
+        SmartTelemetryButton(
             icon = R.drawable.parking_brake,
-            isActive = vm.isParkingBrakeOn,
+            isActiveTelemetry = vm.telemParkingBrake,
             activeColor = Color.Red,
             buttonSize = 36.dp,
             modifier = Modifier.constrainAs(parkingBrake) {
                 bottom.linkTo(brakePedalRef.top, margin = 16.dp)
                 start.linkTo(brakePedalRef.start)
                 end.linkTo(brakePedalRef.end)
-            }
-        ) { vm.isParkingBrakeOn = !vm.isParkingBrakeOn }
-    }
-}
-
-// --- FUNGSI PEMBANTU (DIPERBARUI DENGAN buttonSize) ---
-
-@Composable
-fun ToggleIconButton(
-    icon: Int,
-    modifier: Modifier = Modifier,
-    isActive: Boolean,
-    activeColor: Color = Color.Black,
-    buttonSize: androidx.compose.ui.unit.Dp = 48.dp, // Parameter Baru
-    onClick: () -> Unit
-) {
-    androidx.compose.material3.IconButton(onClick = onClick, modifier = modifier.size(buttonSize)) {
-        Image(
-            painter = painterResource(icon),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(if (isActive) activeColor else Color.Black),
-            modifier = Modifier.fillMaxSize() // Memaksa gambar mengikuti buttonSize
+            },
+            onInputStateChange = { vm.inParkingBrake = it }
         )
     }
 }
 
+// ==========================================
+// ABSTRAKSI UI COMPONENT BARU
+// ==========================================
 @Composable
-fun MomentaryIconButton(
+fun SmartTelemetryButton(
     icon: Int,
     modifier: Modifier = Modifier,
+    isActiveTelemetry: Boolean,
     activeColor: Color = Color.Green,
     buttonSize: androidx.compose.ui.unit.Dp = 48.dp,
-    onPressChange: (Boolean) -> Unit = {} // PARAMETER BARU
+    onInputStateChange: (Boolean) -> Unit
 ) {
     val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
-    // Lempar status ke komponen induk secara real-time
     LaunchedEffect(isPressed) {
-        onPressChange(isPressed)
+        onInputStateChange(isPressed)
     }
 
     androidx.compose.material3.IconButton(
@@ -368,7 +288,47 @@ fun MomentaryIconButton(
         Image(
             painter = painterResource(icon),
             contentDescription = null,
-            colorFilter = ColorFilter.tint(if (isPressed) activeColor else Color.Black),
+            colorFilter = ColorFilter.tint(if (isActiveTelemetry) activeColor else Color.Black),
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}
+
+@Composable
+fun SmartLightButton(
+    lightMode: LightMode,
+    modifier: Modifier = Modifier,
+    buttonSize: androidx.compose.ui.unit.Dp = 48.dp,
+    onInputStateChange: (Boolean) -> Unit
+) {
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    LaunchedEffect(isPressed) {
+        onInputStateChange(isPressed)
+    }
+
+    // Rekonstruksi visual dinamis berdasarkan enum telemetri absolut
+    val icon = when(lightMode) {
+        LightMode.OFF, LightMode.PARKING -> R.drawable.parking_light
+        LightMode.LOW_BEAM -> R.drawable.low_beam
+    }
+
+    val activeColor = when(lightMode) {
+        LightMode.OFF -> Color.Black
+        LightMode.PARKING -> Color.Cyan
+        LightMode.LOW_BEAM -> Color(0xFFFFA500)
+    }
+
+    androidx.compose.material3.IconButton(
+        onClick = { },
+        modifier = modifier.size(buttonSize),
+        interactionSource = interactionSource
+    ) {
+        Image(
+            painter = painterResource(icon),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(activeColor),
             modifier = Modifier.fillMaxSize()
         )
     }
@@ -377,13 +337,11 @@ fun MomentaryIconButton(
 @Composable
 fun SteeringWheel(modifier: Modifier, angle: Float, onAngleChanged: (Float) -> Unit) {
     val scope = rememberCoroutineScope()
-
-    // State UI Absolut: Bebas dari overhead coroutine dispatcher
     var visualAngle by remember { mutableFloatStateOf(angle) }
-    // Dedicated Animator hanya untuk efek pegas kembali ke tengah
     val returnAnimator = remember { Animatable(0f) }
 
-    val maxAngle = 360f
+    // INTERVENSI: Skala Absolut 900 Derajat (1:1 dengan ETS2)
+    val maxAngle = 450f
 
     LaunchedEffect(visualAngle) {
         onAngleChanged(visualAngle)
@@ -393,7 +351,6 @@ fun SteeringWheel(modifier: Modifier, angle: Float, onAngleChanged: (Float) -> U
         painter = painterResource(id = R.drawable.steering_wheel),
         contentDescription = null,
         modifier = modifier
-            // 1. TANGKAP INPUT TERLEBIH DAHULU (Koordinat statis absolut)
             .pointerInput(Unit) {
                 var lastTouchAngle = 0f
                 var accumulatedAngle = 0f
@@ -402,7 +359,6 @@ fun SteeringWheel(modifier: Modifier, angle: Float, onAngleChanged: (Float) -> U
                     onDragStart = { offset ->
                         scope.launch { returnAnimator.stop() }
                         accumulatedAngle = visualAngle
-
                         val centerX = size.width / 2f
                         val centerY = size.height / 2f
                         lastTouchAngle = Math.toDegrees(atan2((offset.y - centerY).toDouble(), (offset.x - centerX).toDouble())).toFloat()
@@ -410,13 +366,7 @@ fun SteeringWheel(modifier: Modifier, angle: Float, onAngleChanged: (Float) -> U
                     onDragEnd = {
                         scope.launch {
                             returnAnimator.snapTo(accumulatedAngle)
-                            returnAnimator.animateTo(
-                                targetValue = 0f,
-                                animationSpec = spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessLow
-                                )
-                            ) {
+                            returnAnimator.animateTo(0f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)) {
                                 visualAngle = this.value
                             }
                         }
@@ -424,21 +374,16 @@ fun SteeringWheel(modifier: Modifier, angle: Float, onAngleChanged: (Float) -> U
                     onDragCancel = {
                         scope.launch {
                             returnAnimator.snapTo(accumulatedAngle)
-                            returnAnimator.animateTo(
-                                targetValue = 0f,
-                                animationSpec = spring(stiffness = Spring.StiffnessVeryLow)
-                            ) {
+                            returnAnimator.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessVeryLow)) {
                                 visualAngle = this.value
                             }
                         }
                     },
                     onDrag = { change, _ ->
                         change.consume()
-
                         val centerX = size.width / 2f
                         val centerY = size.height / 2f
                         val currentTouchAngle = Math.toDegrees(atan2((change.position.y - centerY).toDouble(), (change.position.x - centerX).toDouble())).toFloat()
-
                         var delta = currentTouchAngle - lastTouchAngle
 
                         if (delta > 180f) delta -= 360f
@@ -450,11 +395,11 @@ fun SteeringWheel(modifier: Modifier, angle: Float, onAngleChanged: (Float) -> U
                     }
                 )
             }
-            // 2. TERAPKAN ROTASI VISUAL SETELAH INPUT (Tidak mengubah koordinat sentuh)
             .graphicsLayer { rotationZ = visualAngle }
     )
 }
 
+// (Fungsi Pedal dibiarkan SAMA PERSIS seperti sebelumnya)
 @Composable
 fun Pedal(iconRes: Int, value: Float, onValueChange: (Float) -> Unit) {
     Box(
@@ -471,38 +416,13 @@ fun Pedal(iconRes: Int, value: Float, onValueChange: (Float) -> Unit) {
             },
         contentAlignment = Alignment.BottomCenter
     ) {
-        // Background (Abu-abu)
+        Image(painter = painterResource(iconRes), contentDescription = null, colorFilter = ColorFilter.tint(Color.Black.copy(alpha = 0.2f)))
         Image(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(Color.Black.copy(alpha = 0.2f))
-        )
-        // Fill (Hitam Pekat dengan Clipping dari bawah)
-        Image(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(Color.Black),
+            painter = painterResource(iconRes), contentDescription = null, colorFilter = ColorFilter.tint(Color.Black),
             modifier = Modifier.drawWithContent {
                 val height = size.height
-                clipRect(
-                    top = height - (height * value),
-                    bottom = height
-                ) {
-                    this@drawWithContent.drawContent()
-                }
+                clipRect(top = height - (height * value), bottom = height) { this@drawWithContent.drawContent() }
             }
-        )
-    }
-}
-
-@Composable
-fun SignalButton(icon: Int, isActive: Boolean, activeColor: Color, onClick: () -> Unit) {
-    androidx.compose.material3.IconButton(onClick = onClick) {
-        Image(
-            painter = painterResource(icon),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(if (isActive) activeColor else Color.Black.copy(alpha = 0.3f)),
-            modifier = Modifier.size(30.dp)
         )
     }
 }

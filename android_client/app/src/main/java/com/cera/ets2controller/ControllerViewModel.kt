@@ -1,10 +1,6 @@
 package com.cera.ets2controller
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -16,51 +12,90 @@ import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-// ==========================================
-// 1. ENUMS
-// ==========================================
 enum class LightMode { OFF, PARKING, LOW_BEAM }
-enum class SignalMode { OFF, LEFT, RIGHT, HAZARD }
 
-// ==========================================
-// 2. VIEWMODEL (Isolasi Logika & Jaringan)
-// ==========================================
 class ControllerViewModel : ViewModel() {
-    // Analog States
+    // ==========================================
+    // INPUT STATES (Disentuh oleh Pengguna)
+    // ==========================================
     var steeringAngle by mutableFloatStateOf(0f)
     var gasValue by mutableFloatStateOf(0f)
     var brakeValue by mutableFloatStateOf(0f)
 
-    // Digital States (Toggle)
-    var lightMode by mutableStateOf(LightMode.OFF)
-    var signalMode by mutableStateOf(SignalMode.OFF)
-    var isHighBeamOn by mutableStateOf(false)
-    var isEngineOn by mutableStateOf(false)
-    var isLaneAssistOn by mutableStateOf(false)
-    var isCruiseOn by mutableStateOf(false)
-    var isParkingBrakeOn by mutableStateOf(false)
+    var inEngine by mutableStateOf(false)
+    var inParkingBrake by mutableStateOf(false)
+    var inLight by mutableStateOf(false)
+    var inHighBeam by mutableStateOf(false)
+    var inWiper by mutableStateOf(false)
+    var inHorn by mutableStateOf(false)
+    var inSigLeft by mutableStateOf(false)
+    var inSigRight by mutableStateOf(false)
+    var inHazard by mutableStateOf(false)
+    var inShifterUp by mutableStateOf(false)
+    var inShifterDown by mutableStateOf(false)
+    var inCruiseToggle by mutableStateOf(false)
+    var inCruiseUp by mutableStateOf(false)
+    var inCruiseDown by mutableStateOf(false)
+    var inLaneAssist by mutableStateOf(false)
 
-    // Digital States (Momentary)
-    var isWiperPressed by mutableStateOf(false)
-    var isHornPressed by mutableStateOf(false)
-    var isShifterUpPressed by mutableStateOf(false)
-    var isShifterDownPressed by mutableStateOf(false)
-    var isCruiseUpPressed by mutableStateOf(false)
-    var isCruiseDownPressed by mutableStateOf(false)
+    // ==========================================
+    // TELEMETRY STATES (Dikendalikan oleh ETS2)
+    // ==========================================
+    var telemEngine by mutableStateOf(false)
+    var telemParkingBrake by mutableStateOf(false)
+    var telemLightMode by mutableStateOf(LightMode.OFF)
+    var telemHighBeam by mutableStateOf(false)
+    var telemWiper by mutableStateOf(false)
+    var telemSigLeft by mutableStateOf(false)
+    var telemSigRight by mutableStateOf(false)
+    var telemCruise by mutableStateOf(false)
 
-    var speedKmh by mutableFloatStateOf(0f)
-    var engineRpm by mutableFloatStateOf(0f)
-    var gear by mutableIntStateOf(0)
-    var fuelCapacity by mutableFloatStateOf(0f)
-
-    // System States
     var isConnected by mutableStateOf(false)
+
     private var socket: DatagramSocket? = null
-    private var receiverSocket: DatagramSocket? = null // INTERVENSI 1: Deklarasi global
+    private var receiverSocket: DatagramSocket? = null
 
     init {
         startUdpTransmitter()
         startTelemetryReceiver()
+    }
+
+    private fun startTelemetryReceiver() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                receiverSocket = DatagramSocket(65433)
+                val receiveData = ByteArray(16)
+                val receivePacket = DatagramPacket(receiveData, receiveData.size)
+                val buffer = ByteBuffer.wrap(receiveData).order(ByteOrder.LITTLE_ENDIAN)
+
+                while (true) {
+                    receiverSocket?.receive(receivePacket)
+                    if (receivePacket.length == 16) {
+                        buffer.clear()
+                        val telemMask = buffer.int
+
+                        telemEngine = (telemMask shr 0 and 1) == 1
+                        telemParkingBrake = (telemMask shr 1 and 1) == 1
+                        val isLowBeam = (telemMask shr 2 and 1) == 1
+                        telemHighBeam = (telemMask shr 3 and 1) == 1
+                        telemWiper = (telemMask shr 4 and 1) == 1
+                        telemSigLeft = (telemMask shr 5 and 1) == 1
+                        telemSigRight = (telemMask shr 6 and 1) == 1
+                        telemCruise = (telemMask shr 7 and 1) == 1
+                        val isParking = (telemMask shr 8 and 1) == 1
+
+                        // INJEKSI LOGIKA REKONSTRUKSI ENUM
+                        telemLightMode = when {
+                            isLowBeam -> LightMode.LOW_BEAM
+                            isParking -> LightMode.PARKING
+                            else -> LightMode.OFF
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun startUdpTransmitter() {
@@ -69,13 +104,8 @@ class ControllerViewModel : ViewModel() {
             val port = 65432
 
             try {
-                // Buka soket di port spesifik
                 socket = DatagramSocket(port)
-
-                // ==========================================
-                // FASE 1: PASSIVE LISTENER (Reverse-Beacon)
-                // ==========================================
-                socket?.soTimeout = 0 // Menunggu tanpa batas waktu
+                socket?.soTimeout = 0
 
                 val receiveData = ByteArray(1024)
                 val receivePacket = DatagramPacket(receiveData, receiveData.size)
@@ -83,42 +113,38 @@ class ControllerViewModel : ViewModel() {
                 while (serverAddress == null) {
                     socket?.receive(receivePacket)
                     val response = String(receivePacket.data, 0, receivePacket.length)
-
-                    // Memverifikasi paket ping dari PC
                     if (response.trim() == "ETS2_PC_HERE") {
                         serverAddress = receivePacket.address
                         isConnected = true
                     }
                 }
 
-                // ==========================================
-                // FASE 2: TELEMETRY TRANSMITTER (16-Byte Bitwise)
-                // ==========================================
                 val buffer = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
 
                 while (true) {
-                    var buttonsMask = 0
-                    if (isParkingBrakeOn) buttonsMask = buttonsMask or (1 shl 0)
-                    buttonsMask = buttonsMask or (lightMode.ordinal shl 1)
-                    if (isHighBeamOn) buttonsMask = buttonsMask or (1 shl 3)
-                    buttonsMask = buttonsMask or (signalMode.ordinal shl 4)
-                    if (isHornPressed) buttonsMask = buttonsMask or (1 shl 6)
-                    if (isShifterUpPressed) buttonsMask = buttonsMask or (1 shl 7)
-                    if (isShifterDownPressed) buttonsMask = buttonsMask or (1 shl 8)
-                    if (isCruiseUpPressed) buttonsMask = buttonsMask or (1 shl 9)
-                    if (isCruiseOn) buttonsMask = buttonsMask or (1 shl 10)
-                    if (isCruiseDownPressed) buttonsMask = buttonsMask or (1 shl 11)
-                    if (isLaneAssistOn) buttonsMask = buttonsMask or (1 shl 12)
-                    if (isEngineOn) buttonsMask = buttonsMask or (1 shl 13)
-                    if (isWiperPressed) buttonsMask = buttonsMask or (1 shl 14)
+                    var inputMask = 0
+                    if (inParkingBrake) inputMask = inputMask or (1 shl 0)
+                    if (inLight) inputMask = inputMask or (1 shl 1)
+                    if (inHighBeam) inputMask = inputMask or (1 shl 2)
+                    if (inWiper) inputMask = inputMask or (1 shl 3)
+                    if (inHorn) inputMask = inputMask or (1 shl 4)
+                    if (inSigLeft) inputMask = inputMask or (1 shl 5)
+                    if (inSigRight) inputMask = inputMask or (1 shl 6)
+                    if (inHazard) inputMask = inputMask or (1 shl 7)
+                    if (inShifterUp) inputMask = inputMask or (1 shl 8)
+                    if (inShifterDown) inputMask = inputMask or (1 shl 9)
+                    if (inCruiseToggle) inputMask = inputMask or (1 shl 10)
+                    if (inCruiseUp) inputMask = inputMask or (1 shl 11)
+                    if (inCruiseDown) inputMask = inputMask or (1 shl 12)
+                    if (inLaneAssist) inputMask = inputMask or (1 shl 13)
+                    if (inEngine) inputMask = inputMask or (1 shl 14)
 
                     buffer.clear()
                     buffer.putFloat(steeringAngle)
                     buffer.putFloat(gasValue)
                     buffer.putFloat(brakeValue)
-                    buffer.putInt(buttonsMask)
+                    buffer.putInt(inputMask)
 
-                    // Kirim telemetry balik ke alamat IP PC yang didapatkan
                     val packet = DatagramPacket(buffer.array(), 16, serverAddress, port)
 
                     try {
@@ -136,38 +162,9 @@ class ControllerViewModel : ViewModel() {
         }
     }
 
-    private fun startTelemetryReceiver() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                receiverSocket = DatagramSocket(65433) // INTERVENSI 2: Gunakan variabel global
-                val receiveData = ByteArray(16)
-                val receivePacket = DatagramPacket(receiveData, receiveData.size)
-                val buffer = ByteBuffer.wrap(receiveData).order(ByteOrder.LITTLE_ENDIAN)
-
-                while (true) {
-                    receiverSocket?.receive(receivePacket)
-                    if (receivePacket.length == 16) {
-                        buffer.clear()
-                        speedKmh = buffer.float
-                        engineRpm = buffer.float
-                        gear = buffer.int
-                        fuelCapacity = buffer.float
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    fun setBrake(value: Float) {
-        brakeValue = value
-        if (value > 0.05f) isCruiseOn = false
-    }
-
     override fun onCleared() {
         super.onCleared()
         socket?.close()
-        receiverSocket?.close() // INTERVENSI 3: Cegah Memory Leak
+        receiverSocket?.close()
     }
 }
