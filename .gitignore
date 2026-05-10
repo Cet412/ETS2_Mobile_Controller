@@ -24,6 +24,7 @@ android_client/app/build/
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
 
 # Virtual Environments
 venv/
@@ -37,3 +38,10 @@ env/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# PyInstaller & Inno Setup
+/build/
+/dist/
+/Output/
+*.spec
+*.exe

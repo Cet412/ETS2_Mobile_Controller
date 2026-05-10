@@ -26,6 +26,11 @@ import androidx.constraintlayout.compose.ConstraintLayout
 import kotlin.math.atan2
 import androidx.compose.ui.graphics.drawscope.clipRect
 import kotlinx.coroutines.launch
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 
 class MainActivity : ComponentActivity() {
     private val viewModel: ControllerViewModel by viewModels()
@@ -42,6 +47,38 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ControllerScreen(vm: ControllerViewModel) {
+    // State memori untuk melacak status pop-up (kebal rotasi layar)
+    var showTutorial by rememberSaveable { mutableStateOf(true) }
+
+    // Komponen Pop-up Instruksi
+    if (showTutorial) {
+        AlertDialog(
+            onDismissRequest = { showTutorial = false },
+            title = { androidx.compose.material3.Text("System Connection Protocol", color = Color.Black) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    androidx.compose.material3.Text("1. Activate Mobile Hotspot OR USB Tethering on your Android device.")
+                    androidx.compose.material3.Text("2. Connect your PC to that specific Hotspot/USB network.")
+                    androidx.compose.material3.Text("3. Run the ETS2 Controller Server (exe) on your PC.")
+                    androidx.compose.material3.Text("4. Wait for the top-right indicator to turn Green, then open ETS2.")
+                    androidx.compose.material3.Text("5. Once ETS2 is open, go to the settings menu.")
+                    androidx.compose.material3.Text("6. change driving controls to keyboard + xbox 360 controller (or similar)")
+                    androidx.compose.material3.Text("7. bind each button in this controller application in 'keys and button' menu according to its features (it is more important to bind to secondary than primary)")
+                    androidx.compose.material3.Text("8. For gas, brake, and steering. Bind them in the 'controls' menu to the brake, gas, and steering axes. Steering axis mode uses centered, Acceleration axis mode uses inverted and centered, Brake axis mode uses Normal.")
+                    androidx.compose.material3.Text("9. Enjoy the controller!")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTutorial = false }) {
+                    androidx.compose.material3.Text("I understand", color = Color.Blue)
+                }
+            }
+        )
+    }
+
     ConstraintLayout(modifier = Modifier.fillMaxSize()) {
         val (
             topBar, steering, signals, engine,
@@ -62,11 +99,16 @@ fun ControllerScreen(vm: ControllerViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            androidx.compose.material3.Icon(
-                painter = painterResource(id = android.R.drawable.ic_menu_sort_by_size),
-                contentDescription = "Menu"
-            )
+            // Penggantian ikon menjadi Tanda Tanya (Help)
+            androidx.compose.material3.IconButton(onClick = { showTutorial = true }) {
+                androidx.compose.material3.Icon(
+                    painter = painterResource(id = android.R.drawable.ic_menu_help),
+                    contentDescription = "Bantuan Koneksi"
+                )
+            }
+
             androidx.compose.material3.Text("EURO TRUCK SIMULATOR 2 CONTROLLER", color = Color.Black)
+
             Box(
                 modifier = Modifier
                     .size(16.dp)
@@ -108,7 +150,7 @@ fun ControllerScreen(vm: ControllerViewModel) {
             Spacer(modifier = Modifier.width(16.dp))
             SmartTelemetryButton(
                 icon = R.drawable.horn,
-                isActiveTelemetry = vm.inHorn, // Horn tidak ada telemetri, fallback ke input lokal
+                isActiveTelemetry = vm.inHorn,
                 activeColor = Color.DarkGray,
                 onInputStateChange = { vm.inHorn = it }
             )
