@@ -1,65 +1,37 @@
+; Script untuk ETS2 Mobile Controller Bridge
 [Setup]
 AppName=ETS2 Mobile Controller Bridge
-AppVersion=1.0.0
-DefaultDirName={autopf}\ETS2 Mobile Controller
+AppVersion=1.1.0
+DefaultDirName={pf}\ETS2 Mobile Controller
 DefaultGroupName=ETS2 Mobile Controller
-OutputDir=.\Output
-OutputBaseFilename=ETS2_Controller_PC_Setup
-Compression=lzma
+UninstallDisplayIcon={app}\icon.ico
+Compression=lzma2
 SolidCompression=yes
-ArchitecturesInstallIn64BitMode=x64
+OutputDir=installer_output
+OutputBaseFilename=ETS2_Controller_Setup
 SetupIconFile=icon.ico
+PrivilegesRequired=admin
 
 [Files]
-Source: "dist\ETS2 Controller Server.exe"; DestDir: "{app}"; Flags: ignoreversion; DestName: "ETS2 Controller Server.exe"
-
-Source: "python_bridge\scs-telemetry.dll"; DestDir: "{code:GetETS2Path}\bin\win_x64\plugins"; Flags: ignoreversion
-
-[Icons]
-Name: "{group}\ETS2 Controller Server"; Filename: "{app}\ETS2 Controller Server.exe"
-Name: "{commondesktop}\ETS2 Controller Server"; Filename: "{app}\ETS2 Controller Server.exe"; Tasks: desktopicon
-
-[Tasks]
-Name: "desktopicon"; Description: "Create a shortcut on the Desktop"; GroupDescription: "Additional shortcuts:"
+; Salin seluruh isi folder Bridge (termasuk Driver, Dependencies, dan exe)
+Source: "Bridge\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs; Excludes: "python_bridge"
+; Salin icon ke folder app untuk keperluan uninstall
+Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
-Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""ETS2 Controller Bridge"" dir=in action=allow protocol=UDP localport=65432,65433 program=""{app}\ETS2 Controller Server.exe"""; Flags: runhidden runascurrentuser
+; Opsi 1: Instal driver ViGEmBus & vJoy (checkbox di akhir)
+Filename: "{app}\Driver\install_driver.bat"; Description: "Install required drivers (ViGEmBus & vJoy)"; Flags: runhidden postinstall skipifsilent
 
-[UninstallRun]
-Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""ETS2 Controller Bridge"""; Flags: runhidden runascurrentuser
+; Opsi 2: Instal plugin telemetri ETS2 (copy scs-telemetry.dll ke folder plugins ETS2)
+Filename: "{app}\Driver\install_ets2_plugin.bat"; Description: "Install ETS2 Telemetry Plugin (scs-telemetry.dll)"; Flags: postinstall skipifsilent
 
-[Code]
-var
-  ETS2DirPage: TInputDirWizardPage;
+[Icons]
+Name: "{group}\ETS2 Controller Server"; Filename: "{app}\ETS2_Controller_Server.exe"
+Name: "{group}\Uninstall"; Filename: "{uninstallexe}"
+Name: "{commondesktop}\ETS2 Controller Server"; Filename: "{app}\ETS2_Controller_ Server.exe"; Tasks: desktopicon
 
-procedure InitializeWizard;
-begin
-  ETS2DirPage := CreateInputDirPage(wpSelectDir,
-    'Euro Truck Simulator 2 Installation Locations', 'Where is the ETS2 game installed?',
-    'Select your Euro Truck Simulator 2 root directory (the folder containing bin\win_x64\eurotrucks2.exe). If you have Steam, it is usually located in C:\Program Files (x86)\Steam\steamapps\common\Euro Truck Simulator 2. If you have a different installation method, please select the correct folder.',
-    False, 'New Directory');
-  ETS2DirPage.Add('');
-  ETS2DirPage.Values[0] := 'C:\Program Files (x86)\Steam\steamapps\common\Euro Truck Simulator 2';
-end;
+[Tasks]
+Name: desktopicon; Description: "Create desktop icon"; GroupDescription: "Additional icons:"
 
-function GetETS2Path(Param: String): String;
-begin
-  Result := ETS2DirPage.Values[0];
-end;
-
-function NextButtonClick(CurPageID: Integer): Boolean;
-var
-  SelectedPath: String;
-begin
-  Result := True; 
-  if CurPageID = ETS2DirPage.ID then
-  begin
-    SelectedPath := ETS2DirPage.Values[0];
-
-    if not FileExists(SelectedPath + '\bin\win_x64\eurotrucks2.exe') then
-    begin
-      MsgBox('Invalid directory. Could not find ETS2 executable (bin\win_x64\eurotrucks2.exe).' #13#13 'Please ensure you selected the correct Euro Truck Simulator 2 root installation folder.', mbError, MB_OK);
-      Result := False; 
-    end;
-  end;
-end;
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\Driver"

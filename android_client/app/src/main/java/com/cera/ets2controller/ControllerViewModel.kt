@@ -13,14 +13,17 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 enum class LightMode { OFF, PARKING, LOW_BEAM }
+enum class ScreenState { MAIN, MENU_OPEN, SENSITIVITY, HELP }
 
 class ControllerViewModel : ViewModel() {
-    // ==========================================
-    // INPUT STATES (Disentuh oleh Pengguna)
-    // ==========================================
     var steeringAngle by mutableFloatStateOf(0f)
     var gasValue by mutableFloatStateOf(0f)
     var brakeValue by mutableFloatStateOf(0f)
+
+    var isDragging by mutableStateOf(false)
+    var maxUiSteeringAngle by mutableFloatStateOf(450f)
+    val normalizedSteering: Float
+        get() = (steeringAngle / maxUiSteeringAngle).coerceIn(-1f, 1f)
 
     var inEngine by mutableStateOf(false)
     var inParkingBrake by mutableStateOf(false)
@@ -49,11 +52,14 @@ class ControllerViewModel : ViewModel() {
     var telemSigLeft by mutableStateOf(false)
     var telemSigRight by mutableStateOf(false)
     var telemCruise by mutableStateOf(false)
+    var telemSteering by mutableFloatStateOf(0f)
 
     var isConnected by mutableStateOf(false)
 
     private var socket: DatagramSocket? = null
     private var receiverSocket: DatagramSocket? = null
+    private val UDPPort = 45432
+    private val TelemPort = 45433
 
     init {
         startUdpTransmitter()
@@ -63,7 +69,7 @@ class ControllerViewModel : ViewModel() {
     private fun startTelemetryReceiver() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                receiverSocket = DatagramSocket(65433)
+                receiverSocket = DatagramSocket(TelemPort)
                 val receiveData = ByteArray(16)
                 val receivePacket = DatagramPacket(receiveData, receiveData.size)
                 val buffer = ByteBuffer.wrap(receiveData).order(ByteOrder.LITTLE_ENDIAN)
@@ -84,7 +90,14 @@ class ControllerViewModel : ViewModel() {
                         telemCruise = (telemMask shr 7 and 1) == 1
                         val isParking = (telemMask shr 8 and 1) == 1
 
-                        // INJEKSI LOGIKA REKONSTRUKSI ENUM
+                        val gameSteerNorm = buffer.float
+                        val gameSteerDeg = gameSteerNorm * maxUiSteeringAngle
+                        telemSteering = gameSteerDeg
+
+                        if (!isDragging) {
+                            steeringAngle = gameSteerDeg
+                        }
+
                         telemLightMode = when {
                             isLowBeam -> LightMode.LOW_BEAM
                             isParking -> LightMode.PARKING
@@ -101,10 +114,9 @@ class ControllerViewModel : ViewModel() {
     private fun startUdpTransmitter() {
         viewModelScope.launch(Dispatchers.IO) {
             var serverAddress: InetAddress? = null
-            val port = 65432
 
             try {
-                socket = DatagramSocket(port)
+                socket = DatagramSocket(UDPPort)
                 socket?.soTimeout = 0
 
                 val receiveData = ByteArray(1024)
@@ -140,16 +152,16 @@ class ControllerViewModel : ViewModel() {
                     if (inEngine) inputMask = inputMask or (1 shl 14)
 
                     buffer.clear()
-                    buffer.putFloat(steeringAngle)
+                    buffer.putFloat(normalizedSteering)
                     buffer.putFloat(gasValue)
                     buffer.putFloat(brakeValue)
                     buffer.putInt(inputMask)
 
-                    val packet = DatagramPacket(buffer.array(), 16, serverAddress, port)
+                    val packet = DatagramPacket(buffer.array(), 16, serverAddress, UDPPort)
 
                     try {
                         socket?.send(packet)
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         isConnected = false
                     }
 
